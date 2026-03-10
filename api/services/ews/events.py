@@ -5,9 +5,8 @@ from api.services.ews.client import EWSClient
 
 def _to_ews_datetime(dt: datetime):
     """Convert Python datetime to exchangelib EWSDateTime."""
-    from exchangelib import EWSDateTime, EWSTimeZone
-    tz = EWSTimeZone.timezone("UTC")
-    return EWSDateTime.from_datetime(dt).replace(tzinfo=tz)
+    from exchangelib import EWSDateTime, UTC
+    return EWSDateTime.from_datetime(dt).replace(tzinfo=UTC)
 
 
 async def list_events(account, calendar_id: str, start: datetime, end: datetime) -> list[dict]:

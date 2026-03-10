@@ -186,7 +186,7 @@ async def slot_picked(callback: CallbackQuery, state: FSMContext):
 
     await state.set_state(SlotStates.confirm_create)
     await callback.message.edit_text(
-        f"Слот: {start.strftime('%d.%m.%Y %H:%M')} – {end.strftime('%H:%M')}\n"
+        f"Слот: {start.strftime('%d.%m.%y %H:%M')} – {end.strftime('%H:%M')}\n"
         "Создать встречу в этот слот?",
         reply_markup=builder.as_markup(),
     )

@@ -97,7 +97,7 @@ async def handle_text_input(message: Message, state: FSMContext):
 
             preview = (
                 f"<b>Встреча:</b> {draft.get('title')}\n"
-                f"<b>Начало:</b> {start.strftime('%d.%m.%Y %H:%M')}\n"
+                f"<b>Начало:</b> {start.strftime('%d.%m.%y %H:%M')}\n"
                 f"<b>Конец:</b> {end.strftime('%H:%M')}\n"
                 f"{rec_str}"
             )
@@ -169,7 +169,7 @@ async def date_picked(callback: CallbackQuery, state: FSMContext):
     await state.update_data(chosen_date=chosen_date.isoformat())
     await state.set_state(CreateEventStates.choose_time)
     await callback.message.edit_text(
-        f"Дата: {chosen_date.strftime('%d.%m.%Y')}\n\nВыберите время начала:",
+        f"Дата: {chosen_date.strftime('%d.%m.%y')}\n\nВыберите время начала:",
         reply_markup=build_time_grid_keyboard(),
     )
     await callback.answer()
@@ -325,7 +325,7 @@ async def _show_confirm(message, state: FSMContext):
     confirm_text = (
         f"<b>Подтвердите создание встречи:</b>\n\n"
         f"<b>Название:</b> {title}\n"
-        f"<b>Начало:</b> {start.strftime('%d.%m.%Y %H:%M')}\n"
+        f"<b>Начало:</b> {start.strftime('%d.%m.%y %H:%M')}\n"
         f"<b>Конец:</b> {end.strftime('%H:%M')}\n"
         f"{rec_str}"
     )

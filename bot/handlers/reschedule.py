@@ -82,7 +82,7 @@ async def reschedule_date_picked(callback: CallbackQuery, state: FSMContext):
     await state.update_data(new_date=chosen_date.isoformat())
     await state.set_state(RescheduleStates.choose_time)
     await callback.message.edit_text(
-        f"Дата: {chosen_date.strftime('%d.%m.%Y')}\nВыберите новое время:",
+        f"Дата: {chosen_date.strftime('%d.%m.%y')}\nВыберите новое время:",
         reply_markup=build_time_grid_keyboard(),
     )
     await callback.answer()

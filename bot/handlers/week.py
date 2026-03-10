@@ -26,8 +26,9 @@ async def cmd_week(message: Message):
         await message.answer(f"Ошибка при загрузке событий: {e}")
         return
 
+    monday_fmt = monday.strftime("%d.%m.%y")
     if not events:
-        await message.answer(f"На этой неделе (с {date_from}) событий нет.")
+        await message.answer(f"На этой неделе (с {monday_fmt}) событий нет.")
         return
 
     # Group by day
@@ -41,11 +42,11 @@ async def cmd_week(message: Message):
             day_key = "unknown"
         by_day.setdefault(day_key, []).append(event)
 
-    lines = [f"<b>События на неделю (с {date_from}):</b>"]
+    lines = [f"<b>События на неделю (с {monday_fmt}):</b>"]
     for day_key in sorted(by_day.keys()):
         try:
             day_dt = datetime.strptime(day_key, "%Y-%m-%d")
-            day_name = day_dt.strftime("%A, %d.%m")
+            day_name = day_dt.strftime("%A, %d.%m.%y")
         except Exception:
             day_name = day_key
         lines.append(f"\n<b>{day_name}:</b>")
