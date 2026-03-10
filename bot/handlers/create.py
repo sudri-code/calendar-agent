@@ -86,10 +86,17 @@ async def handle_text_input(message: Message, state: FSMContext):
             for att in attendees:
                 if att.get("email", "").endswith("@unknown"):
                     try:
-                        contacts = await api_client.get(
-                            "/api/v1/contacts/search",
-                            params={"telegram_user_id": message.from_user.id, "q": att.get("name", "")},
-                        )
+                        name = att.get("name", "")
+                        contacts = []
+                        # Try full name, then progressively strip endings (Russian declension)
+                        for trim in range(0, min(4, max(0, len(name) - 3))):
+                            q = name[:len(name) - trim] if trim > 0 else name
+                            contacts = await api_client.get(
+                                "/api/v1/contacts/search",
+                                params={"telegram_user_id": message.from_user.id, "q": q},
+                            )
+                            if contacts:
+                                break
                         if contacts:
                             resolved.append({"email": contacts[0].get("email", att["email"]), "name": contacts[0].get("name", att.get("name"))})
                         else:
@@ -253,12 +260,17 @@ async def attendees_entered(message: Message, state: FSMContext):
         if "@" in part:
             attendees.append({"email": part, "name": None})
         else:
-            # Search contacts
+            # Search contacts with Russian declension fallback
             try:
-                contacts = await api_client.get(
-                    "/api/v1/contacts/search",
-                    params={"telegram_user_id": message.from_user.id, "q": part},
-                )
+                contacts = []
+                for trim in range(0, min(4, max(0, len(part) - 3))):
+                    q = part[:len(part) - trim] if trim > 0 else part
+                    contacts = await api_client.get(
+                        "/api/v1/contacts/search",
+                        params={"telegram_user_id": message.from_user.id, "q": q},
+                    )
+                    if contacts:
+                        break
                 if contacts:
                     c = contacts[0]
                     attendees.append({"email": c.get("email", ""), "name": c.get("name")})
