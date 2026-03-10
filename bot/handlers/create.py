@@ -80,6 +80,26 @@ async def handle_text_input(message: Message, state: FSMContext):
                 await state.clear()
                 return
 
+            # Resolve attendees without real emails against contact book
+            attendees = draft.get("attendees") or []
+            resolved = []
+            for att in attendees:
+                if att.get("email", "").endswith("@unknown"):
+                    try:
+                        contacts = await api_client.get(
+                            "/api/v1/contacts/search",
+                            params={"telegram_user_id": message.from_user.id, "q": att.get("name", "")},
+                        )
+                        if contacts:
+                            resolved.append({"email": contacts[0].get("email", att["email"]), "name": contacts[0].get("name", att.get("name"))})
+                        else:
+                            resolved.append(att)
+                    except Exception:
+                        resolved.append(att)
+                else:
+                    resolved.append(att)
+            draft["attendees"] = resolved
+
             await state.update_data(draft=draft, llm_result=result)
 
             # Show preview
@@ -95,10 +115,14 @@ async def handle_text_input(message: Message, state: FSMContext):
             start = datetime.fromisoformat(draft["start_at"])
             end = datetime.fromisoformat(draft["end_at"])
 
+            att_names = [a.get("name") or a.get("email", "") for a in (draft.get("attendees") or []) if a.get("email") and not a.get("email", "").endswith("@unknown")]
+            att_str = f"\n<b>Участники:</b> {', '.join(att_names)}" if att_names else ""
+
             preview = (
                 f"<b>Встреча:</b> {draft.get('title')}\n"
                 f"<b>Начало:</b> {start.strftime('%d.%m.%y %H:%M')}\n"
                 f"<b>Конец:</b> {end.strftime('%H:%M')}\n"
+                f"{att_str}"
                 f"{rec_str}"
             )
 
@@ -322,11 +346,20 @@ async def _show_confirm(message, state: FSMContext):
         }
         rec_str = f"\n🔁 Повторяется {freq_labels.get(recurrence.get('frequency'), recurrence.get('frequency', ''))}"
 
+    # Attendees
+    if data.get("draft"):
+        raw_att = data["draft"].get("attendees") or []
+    else:
+        raw_att = data.get("attendees") or []
+    att_names = [a.get("name") or a.get("email", "") for a in raw_att if a.get("email") and not a.get("email", "").endswith("@unknown")]
+    att_str = f"\n<b>Участники:</b> {', '.join(att_names)}" if att_names else ""
+
     confirm_text = (
         f"<b>Подтвердите создание встречи:</b>\n\n"
         f"<b>Название:</b> {title}\n"
         f"<b>Начало:</b> {start.strftime('%d.%m.%y %H:%M')}\n"
         f"<b>Конец:</b> {end.strftime('%H:%M')}\n"
+        f"{att_str}"
         f"{rec_str}"
     )
 

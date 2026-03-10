@@ -35,62 +35,61 @@ async def _get_account_for_calendar(session: AsyncSession, calendar: Calendar) -
     return result.scalar_one()
 
 
-def _build_graph_event_body(draft: EventDraft) -> dict:
-    """Convert EventDraft to Graph API event body."""
+def _build_ews_recurrence(rec, start_dt):
+    """Build exchangelib Recurrence object from RecurrenceConfig."""
+    from exchangelib.recurrence import (
+        DailyPattern, WeeklyPattern, AbsoluteMonthlyPattern, AbsoluteYearlyPattern,
+        NoEndRecurrenceRange, EndDateRecurrenceRange, NumberedRecurrenceRange,
+        Recurrence,
+    )
+    from exchangelib import EWSDate
+
+    day_map = {
+        "MO": "Monday", "TU": "Tuesday", "WE": "Wednesday",
+        "TH": "Thursday", "FR": "Friday", "SA": "Saturday", "SU": "Sunday",
+    }
+    weekday_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+    if rec.frequency == "daily":
+        pattern = DailyPattern(interval=rec.interval)
+    elif rec.frequency == "weekly":
+        days = [day_map.get(d.upper(), d) for d in (rec.days_of_week or [])]
+        if not days:
+            days = [weekday_names[start_dt.weekday()]]
+        pattern = WeeklyPattern(interval=rec.interval, weekdays=days)
+    elif rec.frequency == "monthly":
+        pattern = AbsoluteMonthlyPattern(interval=rec.interval, day_of_month=start_dt.day)
+    else:  # yearly
+        pattern = AbsoluteYearlyPattern(day_of_month=start_dt.day, month=start_dt.month)
+
+    start_ews = EWSDate(start_dt.year, start_dt.month, start_dt.day)
+    if rec.end_type == "by_date" and rec.end_date:
+        from datetime import date as date_type
+        ed = date_type.fromisoformat(rec.end_date)
+        rec_range = EndDateRecurrenceRange(start=start_ews, end=EWSDate(ed.year, ed.month, ed.day))
+    elif rec.end_type == "by_count" and rec.count:
+        rec_range = NumberedRecurrenceRange(start=start_ews, number=rec.count)
+    else:
+        rec_range = NoEndRecurrenceRange(start=start_ews)
+
+    return Recurrence(pattern=pattern, range=rec_range)
+
+
+def _build_ews_event_body(draft: EventDraft) -> dict:
+    """Convert EventDraft to EWS client-compatible event body."""
     body = {
         "subject": draft.title,
-        "body": {
-            "contentType": "text",
-            "content": draft.description or "",
-        },
-        "start": {
-            "dateTime": draft.start_at.strftime("%Y-%m-%dT%H:%M:%S"),
-            "timeZone": draft.timezone,
-        },
-        "end": {
-            "dateTime": draft.end_at.strftime("%Y-%m-%dT%H:%M:%S"),
-            "timeZone": draft.timezone,
-        },
+        "body": draft.description or "",
+        "start": draft.start_at,
+        "end": draft.end_at,
         "attendees": [
-            {
-                "emailAddress": {
-                    "address": a.email,
-                    "name": a.name or a.email,
-                },
-                "type": "required",
-            }
+            {"email": a.email, "name": a.name or ""}
             for a in (draft.attendees or [])
         ],
     }
 
     if draft.recurrence:
-        from api.services.events.recurrence_mapper import rrule_to_graph_recurrence
-        from shared.schemas.event import RecurrenceConfig
-
-        rec = draft.recurrence
-        # Build rrule string from config
-        freq_map = {
-            "daily": "DAILY",
-            "weekly": "WEEKLY",
-            "monthly": "MONTHLY",
-            "yearly": "YEARLY",
-        }
-        rrule_parts = [f"FREQ={freq_map.get(rec.frequency, 'DAILY')}"]
-        if rec.interval > 1:
-            rrule_parts.append(f"INTERVAL={rec.interval}")
-        if rec.days_of_week:
-            day_map = {"MO": "MO", "TU": "TU", "WE": "WE", "TH": "TH", "FR": "FR", "SA": "SA", "SU": "SU"}
-            byday = ",".join(day_map.get(d.upper(), d.upper()) for d in rec.days_of_week)
-            rrule_parts.append(f"BYDAY={byday}")
-        if rec.end_type == "by_date" and rec.end_date:
-            until = rec.end_date.replace("-", "") + "T235959Z"
-            rrule_parts.append(f"UNTIL={until}")
-        elif rec.end_type == "by_count" and rec.count:
-            rrule_parts.append(f"COUNT={rec.count}")
-
-        rrule_str = "RRULE:" + ";".join(rrule_parts)
-        graph_rec = rrule_to_graph_recurrence(rrule_str, draft.start_at.date())
-        body["recurrence"] = graph_rec
+        body["recurrence"] = _build_ews_recurrence(draft.recurrence, draft.start_at)
 
     return body
 
@@ -121,30 +120,27 @@ async def create_event(
         session.add(sync_group)
         await session.flush()
 
-        # Create primary in Graph
-        graph_body = _build_graph_event_body(draft)
+        # Create primary event via EWS
+        ews_body = _build_ews_event_body(draft)
         graph_event = await graph_create_event(
             primary_account,
             primary_calendar.external_calendar_id,
-            graph_body,
+            ews_body,
         )
 
         # Save primary event in DB
         is_recurring = draft.recurrence is not None
         rrule_str = None
         if is_recurring and draft.recurrence:
-            from api.services.events.recurrence_mapper import rrule_to_graph_recurrence
             rec = draft.recurrence
             freq_map = {"daily": "DAILY", "weekly": "WEEKLY", "monthly": "MONTHLY", "yearly": "YEARLY"}
             rrule_parts = [f"FREQ={freq_map.get(rec.frequency, 'DAILY')}"]
             if rec.interval > 1:
                 rrule_parts.append(f"INTERVAL={rec.interval}")
             if rec.days_of_week:
-                byday = ",".join(d.upper() for d in rec.days_of_week)
-                rrule_parts.append(f"BYDAY={byday}")
+                rrule_parts.append(f"BYDAY={','.join(d.upper() for d in rec.days_of_week)}")
             if rec.end_type == "by_date" and rec.end_date:
-                until = rec.end_date.replace("-", "") + "T235959Z"
-                rrule_parts.append(f"UNTIL={until}")
+                rrule_parts.append(f"UNTIL={rec.end_date.replace('-', '')}T235959Z")
             elif rec.end_type == "by_count" and rec.count:
                 rrule_parts.append(f"COUNT={rec.count}")
             rrule_str = "RRULE:" + ";".join(rrule_parts)
@@ -188,8 +184,8 @@ async def create_event(
         for mirror_cal in mirror_calendars:
             mirror_account = await _get_account_for_calendar(session, mirror_cal)
             mirror_graph_body = build_mirror_body(primary_event, primary_calendar.name)
-            if is_recurring and "recurrence" in graph_body:
-                mirror_graph_body["recurrence"] = graph_body["recurrence"]
+            if is_recurring and "recurrence" in ews_body:
+                mirror_graph_body["recurrence"] = ews_body["recurrence"]
 
             try:
                 mirror_graph_event = await graph_create_event(
