@@ -60,3 +60,27 @@ def sync_all_contacts_task():
                 logger.error("Failed to sync contacts for user", user_id=str(user.id), error=str(e))
 
     asyncio.run(_run())
+
+
+@app.task(name="worker.tasks.sync_tasks.sync_all_calendars_task")
+def sync_all_calendars_task():
+    """Sync calendar list for all active users."""
+    async def _run():
+        from sqlalchemy import select
+        from api.db.session import async_session_factory
+        from api.models.user import User
+        from api.services.calendar_sync import sync_calendars
+
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(User).where(User.is_active == True)
+            )
+            users = result.scalars().all()
+
+        for user in users:
+            try:
+                await sync_calendars(user.id)
+            except Exception as e:
+                logger.error("Failed to sync calendars for user", user_id=str(user.id), error=str(e))
+
+    asyncio.run(_run())

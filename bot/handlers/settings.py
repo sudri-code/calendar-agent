@@ -32,9 +32,10 @@ async def cmd_settings(message: Message):
         mirror_status = "✅" if cal.get("is_mirror_enabled") else "❌"
         active_status = "🟢" if cal.get("is_active") else "⚪"
         label = f"{active_status} {cal['name']} | Зеркало: {mirror_status}"
+        new_val = "1" if not cal.get("is_mirror_enabled") else "0"
         builder.button(
             text=label,
-            callback_data=f"settings:toggle_mirror:{cal['id']}:{not cal.get('is_mirror_enabled')}",
+            callback_data=f"stg:mir:{cal['id']}:{new_val}",
         )
     builder.adjust(1)
 
@@ -44,11 +45,11 @@ async def cmd_settings(message: Message):
     )
 
 
-@router.callback_query(F.data.startswith("settings:toggle_mirror:"))
+@router.callback_query(F.data.startswith("stg:mir:"))
 async def toggle_mirror(callback: CallbackQuery):
     parts = callback.data.split(":")
     cal_id = parts[2]
-    new_value = parts[3] == "True"
+    new_value = parts[3] == "1"
 
     try:
         await api_client.patch(
@@ -69,9 +70,10 @@ async def toggle_mirror(callback: CallbackQuery):
             mirror_status = "✅" if cal.get("is_mirror_enabled") else "❌"
             active_status = "🟢" if cal.get("is_active") else "⚪"
             label = f"{active_status} {cal['name']} | Зеркало: {mirror_status}"
+            new_val = "1" if not cal.get("is_mirror_enabled") else "0"
             builder.button(
                 text=label,
-                callback_data=f"settings:toggle_mirror:{cal['id']}:{not cal.get('is_mirror_enabled')}",
+                callback_data=f"stg:mir:{cal['id']}:{new_val}",
             )
         builder.adjust(1)
         await callback.message.edit_reply_markup(reply_markup=builder.as_markup())

@@ -41,5 +41,10 @@ app.conf.update(
             "task": "worker.tasks.sync_tasks.sync_all_contacts_task",
             "schedule": crontab(minute=0, hour="*/12"),
         },
+        # Sync calendar list every 12 hours
+        "sync-all-calendars": {
+            "task": "worker.tasks.sync_tasks.sync_all_calendars_task",
+            "schedule": crontab(minute=30, hour="*/12"),
+        },
     },
 )
