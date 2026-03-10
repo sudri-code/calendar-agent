@@ -42,13 +42,13 @@ async def main():
     if bot_settings.bot_webhook_url:
         logger.info("Starting bot in webhook mode", url=bot_settings.bot_webhook_url)
         await bot.set_webhook(
-            url=f"{bot_settings.bot_webhook_url}",
+            url=bot_settings.bot_webhook_url,
             secret_token=bot_settings.bot_webhook_secret,
         )
-        # Webhook server would be set up here
         await dp.start_polling(bot, skip_updates=True)
     else:
         logger.info("Starting bot in polling mode")
+        await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot, skip_updates=True)
 
 
