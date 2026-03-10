@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -7,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.config import settings
 from api.db.session import get_async_session
 from api.exceptions import (
     CalendarConflictError, EventNotFoundError, MirrorSyncError
@@ -65,7 +67,8 @@ async def get_day_events(
     session: AsyncSession = Depends(get_async_session),
 ):
     user = await get_or_create_user(telegram_user_id, session)
-    day = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    tz = ZoneInfo(settings.ews_timezone)
+    day = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=tz)
     day_end = day.replace(hour=23, minute=59, second=59)
     return await _fetch_ews_events(user.id, day, day_end, session)
 
@@ -77,7 +80,8 @@ async def get_week_events(
     session: AsyncSession = Depends(get_async_session),
 ):
     user = await get_or_create_user(telegram_user_id, session)
-    start = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    tz = ZoneInfo(settings.ews_timezone)
+    start = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=tz)
     end = start + timedelta(days=7)
     return await _fetch_ews_events(user.id, start, end, session)
 

@@ -1,17 +1,25 @@
 from datetime import datetime
 
+from api.config import settings
 from api.services.ews.client import EWSClient
 
 
 def _to_ews_datetime(dt: datetime):
-    """Convert Python datetime to exchangelib EWSDateTime."""
+    """Convert Python datetime to exchangelib EWSDateTime, preserving tzinfo."""
     from exchangelib import EWSDateTime, UTC
-    return EWSDateTime.from_datetime(dt).replace(tzinfo=UTC)
+    if dt.tzinfo is None:
+        return EWSDateTime.from_datetime(dt).replace(tzinfo=UTC)
+    return EWSDateTime.from_datetime(dt)
 
 
 async def list_events(account, calendar_id: str, start: datetime, end: datetime) -> list[dict]:
     async with EWSClient(account) as client:
-        return await client.get_events(calendar_id, _to_ews_datetime(start), _to_ews_datetime(end))
+        return await client.get_events(
+            calendar_id,
+            _to_ews_datetime(start),
+            _to_ews_datetime(end),
+            settings.ews_timezone,
+        )
 
 
 async def create_event(account, calendar_id: str, event_body: dict) -> dict:

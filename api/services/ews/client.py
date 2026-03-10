@@ -118,11 +118,10 @@ class EWSClient:
 
         return await run_ews(_fetch)
 
-    async def get_events(self, folder_id: str, start, end) -> list[dict]:
-        from exchangelib import EWSDateTime, EWSTimeZone
-        from exchangelib.items import CalendarItem
-
+    async def get_events(self, folder_id: str, start, end, timezone_str: str = "UTC") -> list[dict]:
         def _fetch():
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(timezone_str)
             acc = self._get_account()
             # Resolve folder: default calendar or sub-folder by id
             folder = acc.calendar
@@ -135,7 +134,7 @@ class EWSClient:
             items = folder.view(start=start, end=end)
             result = []
             for item in items:
-                result.append(_calendar_item_to_dict(item))
+                result.append(_calendar_item_to_dict(item, tz))
             return result
 
         return await run_ews(_fetch)
@@ -246,15 +245,23 @@ class EWSClient:
         pass
 
 
-def _calendar_item_to_dict(item) -> dict:
-    """Convert exchangelib CalendarItem to a plain dict."""
+def _calendar_item_to_dict(item, local_tz=None) -> dict:
+    """Convert exchangelib CalendarItem to a plain dict.
+    local_tz: zoneinfo.ZoneInfo to convert times into (default: UTC).
+    """
+    def _fmt(ews_dt):
+        if ews_dt is None:
+            return None
+        dt = ews_dt.astimezone(local_tz) if local_tz else ews_dt
+        return dt.isoformat()
+
     return {
         "id": getattr(item, "id", ""),
         "changeKey": getattr(item, "changekey", ""),
         "subject": getattr(item, "subject", "") or "",
         "body": str(getattr(item, "body", "") or ""),
-        "start": item.start.ewsformat() if item.start else None,
-        "end": item.end.ewsformat() if item.end else None,
+        "start": _fmt(item.start),
+        "end": _fmt(item.end),
         "isRecurring": getattr(item, "is_recurring", False),
         "recurrence": getattr(item, "recurrence", None),
         "type": getattr(item, "type", "singleInstance"),

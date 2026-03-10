@@ -12,6 +12,7 @@ class Settings(BaseSettings):
 
     # EWS (on-premises Exchange)
     ews_verify_ssl: bool = True   # set False for self-signed corporate certs
+    ews_timezone: str = "Europe/Moscow"  # IANA timezone for calendar display
 
     # Security
     encryption_key: str = ""
