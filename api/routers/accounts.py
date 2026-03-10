@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +10,8 @@ from api.db.session import get_async_session
 from api.models.exchange_account import ExchangeAccount
 from api.models.user import User
 from api.schemas.account import AccountResponse, AddAccountRequest
+
+logger = structlog.get_logger()
 
 router = APIRouter(prefix="/api/v1/accounts", tags=["accounts"])
 
@@ -89,6 +92,15 @@ async def add_account(
         session.add(account)
 
     await session.flush()
+    await session.commit()
+
+    # Sync calendars immediately after account is saved
+    try:
+        from api.services.calendar_sync import sync_calendars
+        await sync_calendars(user.id)
+    except Exception as e:
+        logger.warning("Calendar sync failed after account add", error=str(e))
+
     return account
 
 

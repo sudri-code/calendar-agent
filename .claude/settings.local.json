@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(grep -n \"build-backend\\\\|backends.legacy\" /Users/ankel/Develop/calendar-agent/*/pyproject.toml)"
+      "Bash(grep -n \"build-backend\\\\|backends.legacy\" /Users/ankel/Develop/calendar-agent/*/pyproject.toml)",
+      "Bash(git add:*)"
     ]
   }
 }
