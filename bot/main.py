@@ -38,17 +38,20 @@ async def main():
     dp.include_router(accounts.router)
     dp.include_router(settings.router)
 
-    # Start bot
+    # Start bot — always delete webhook first to ensure clean state
+    await bot.delete_webhook(drop_pending_updates=True)
+
     if bot_settings.bot_webhook_url:
         logger.info("Starting bot in webhook mode", url=bot_settings.bot_webhook_url)
         await bot.set_webhook(
             url=bot_settings.bot_webhook_url,
             secret_token=bot_settings.bot_webhook_secret,
         )
-        await dp.start_polling(bot, skip_updates=True)
+        # Webhook requests are handled by nginx → bot HTTP server.
+        # Keep process alive without polling.
+        await asyncio.Event().wait()
     else:
         logger.info("Starting bot in polling mode")
-        await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot, skip_updates=True)
 
 
