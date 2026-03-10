@@ -58,6 +58,7 @@ async def main():
         await bot.set_webhook(
             url=bot_settings.bot_webhook_url,
             secret_token=bot_settings.bot_webhook_secret,
+            allowed_updates=dp.resolve_used_update_types(),
         )
         # Start aiohttp server to receive webhook updates from Telegram via nginx
         app = web.Application()
