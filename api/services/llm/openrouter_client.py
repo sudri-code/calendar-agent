@@ -36,7 +36,10 @@ class OpenRouterClient:
         if response_format:
             payload["response_format"] = response_format
 
+        logger.debug("OpenRouter request", model=model, url=str(self._client.base_url) + "/chat/completions")
         response = await self._client.post("/chat/completions", json=payload)
+        if not response.is_success:
+            logger.error("OpenRouter error", status=response.status_code, model=model, body=response.text[:500])
         response.raise_for_status()
         return response.json()
 
