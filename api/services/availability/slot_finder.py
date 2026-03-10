@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from api.services.availability.availability_service import check_slot
@@ -33,8 +33,14 @@ async def find_slots(
         h, m = map(int, preferred_time_to.split(":"))
         pref_end_hour = h
 
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     available_slots = []
     current = date_from.replace(hour=WORK_HOUR_START, minute=0, second=0, microsecond=0)
+    # Start from now if date_from is today
+    if current < now:
+        # Round up to next 30-min boundary
+        minutes_ahead = (now.minute // SLOT_INTERVAL + 1) * SLOT_INTERVAL
+        current = now.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=minutes_ahead)
 
     while current < date_to and len(available_slots) < MAX_SLOTS * 3:
         # Skip outside working hours

@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+import re
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -59,9 +60,25 @@ async def slot_people_entered(message: Message, state: FSMContext):
     today = date.today()
     next_week = today + timedelta(days=7)
     await message.answer(
-        f"Введите диапазон дат в формате ГГГГ-ММ-ДД:ГГГГ-ММ-ДД\n"
-        f"Или нажмите /skip для диапазона: {today} – {next_week}"
+        f"Введите диапазон дат в формате ДД.ММ:ДД.ММ (год опционален, например <code>10.03:17.03</code>)\n"
+        f"Или нажмите /skip для диапазона: {today.strftime('%d.%m')} – {next_week.strftime('%d.%m')}",
+        parse_mode="HTML",
     )
+
+
+def _parse_date(s: str) -> date:
+    """Parse DD.MM or DD.MM.YYYY into date. Year defaults to current."""
+    s = s.strip()
+    if re.match(r"^\d{1,2}\.\d{1,2}\.\d{4}$", s):
+        return datetime.strptime(s, "%d.%m.%Y").date()
+    if re.match(r"^\d{1,2}\.\d{1,2}$", s):
+        today = date.today()
+        d = datetime.strptime(s + f".{today.year}", "%d.%m.%Y").date()
+        # If date is already past, assume next year
+        if d < today:
+            d = d.replace(year=today.year + 1)
+        return d
+    raise ValueError(f"Неверный формат даты: {s}")
 
 
 @router.message(SlotStates.enter_range, F.text)
@@ -73,9 +90,14 @@ async def slot_range_entered(message: Message, state: FSMContext):
     else:
         parts = message.text.split(":")
         if len(parts) != 2:
-            await message.answer("Неверный формат. Используйте ГГГГ-ММ-ДД:ГГГГ-ММ-ДД")
+            await message.answer("Неверный формат. Используйте ДД.ММ:ДД.ММ, например <code>10.03:17.03</code>", parse_mode="HTML")
             return
-        date_from, date_to = parts[0].strip(), parts[1].strip()
+        try:
+            date_from = _parse_date(parts[0]).isoformat()
+            date_to = _parse_date(parts[1]).isoformat()
+        except ValueError as e:
+            await message.answer(str(e))
+            return
 
     await state.update_data(date_from=date_from, date_to=date_to)
     await state.set_state(SlotStates.enter_duration)

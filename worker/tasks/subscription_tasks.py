@@ -20,7 +20,8 @@ def poll_calendar_changes_task():
     async def _run():
         from datetime import datetime, timedelta, timezone
         from sqlalchemy import select
-        from api.db.session import async_session_factory
+        from worker.db import make_session_factory
+        async_session_factory = make_session_factory()
         from api.models.exchange_account import ExchangeAccount
         from api.models.calendar import Calendar
         from api.models.event import Event

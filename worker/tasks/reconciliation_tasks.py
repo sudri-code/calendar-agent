@@ -11,7 +11,8 @@ def reconcile_sync_groups_task():
     """Daily reconciliation of sync groups - compare primary vs mirrors."""
     async def _run():
         from sqlalchemy import select
-        from api.db.session import async_session_factory
+        from worker.db import make_session_factory
+        async_session_factory = make_session_factory()
         from api.models.sync_group import SyncGroup
         from api.services.events.mirror_service import repair_sync_group
         from shared.constants import SyncGroupState

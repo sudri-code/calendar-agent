@@ -5,11 +5,10 @@ from api.services.ews.client import EWSClient, run_ews
 
 async def get_schedule(account, emails: list[str], start: datetime, end: datetime, timezone: str = "UTC") -> dict:
     """Get free/busy schedule via EWS GetUserAvailability."""
-    from exchangelib import EWSDateTime, EWSTimeZone
+    from exchangelib import EWSDateTime, UTC
 
-    tz = EWSTimeZone.timezone(timezone)
-    ews_start = EWSDateTime.from_datetime(start).replace(tzinfo=tz)
-    ews_end = EWSDateTime.from_datetime(end).replace(tzinfo=tz)
+    ews_start = EWSDateTime.from_datetime(start).replace(tzinfo=UTC)
+    ews_end = EWSDateTime.from_datetime(end).replace(tzinfo=UTC)
 
     def _fetch():
         from exchangelib import Account, Configuration, Credentials, NTLM, DELEGATE

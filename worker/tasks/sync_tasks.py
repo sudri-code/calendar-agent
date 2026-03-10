@@ -43,10 +43,10 @@ def sync_all_contacts_task():
     """Sync contacts for all active users."""
     async def _run():
         from sqlalchemy import select
-        from api.db.session import async_session_factory
+        from worker.db import make_session_factory
+        async_session_factory = make_session_factory()
         from api.models.user import User
         from api.services.contact_sync import sync_contacts
-
         async with async_session_factory() as session:
             result = await session.execute(
                 select(User).where(User.is_active == True)
@@ -67,7 +67,8 @@ def sync_all_calendars_task():
     """Sync calendar list for all active users."""
     async def _run():
         from sqlalchemy import select
-        from api.db.session import async_session_factory
+        from worker.db import make_session_factory
+        async_session_factory = make_session_factory()
         from api.models.user import User
         from api.services.calendar_sync import sync_calendars
 
