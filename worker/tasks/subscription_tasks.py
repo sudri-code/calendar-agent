@@ -1,6 +1,8 @@
+"""
+On-premises Exchange does not use Graph API subscriptions.
+Change detection is done via periodic EWS polling instead.
+"""
 import asyncio
-from datetime import datetime, timedelta, timezone
-
 import structlog
 
 from worker.celery_config import app
@@ -8,137 +10,97 @@ from worker.celery_config import app
 logger = structlog.get_logger()
 
 
-@app.task(name="worker.tasks.subscription_tasks.renew_expiring_subscriptions_task")
-def renew_expiring_subscriptions_task():
-    """Renew Graph subscriptions expiring within 2 days."""
+@app.task(name="worker.tasks.subscription_tasks.poll_calendar_changes_task")
+def poll_calendar_changes_task():
+    """
+    Poll all active Exchange accounts for calendar changes.
+    Compares current EWS events against DB state and syncs mirrors.
+    Runs every 5 minutes via Celery Beat.
+    """
     async def _run():
+        from datetime import datetime, timedelta, timezone
         from sqlalchemy import select
         from api.db.session import async_session_factory
-        from api.models.graph_subscription import GraphSubscription
         from api.models.exchange_account import ExchangeAccount
-        from api.services.graph.client import GraphClient
+        from api.models.calendar import Calendar
+        from api.models.event import Event
+        from api.services.ews.events import list_events
+        from api.services.events.mirror_service import sync_mirror_to_primary
+        from shared.constants import EventRole
 
-        threshold = datetime.now(timezone.utc) + timedelta(days=2)
+        window_start = datetime.now(timezone.utc) - timedelta(days=1)
+        window_end = datetime.now(timezone.utc) + timedelta(days=30)
 
         async with async_session_factory() as session:
             result = await session.execute(
-                select(GraphSubscription).where(
-                    GraphSubscription.expires_at < threshold,
-                    GraphSubscription.status == "active",
-                )
+                select(ExchangeAccount).where(ExchangeAccount.status == "active")
             )
-            expiring = result.scalars().all()
+            accounts = result.scalars().all()
 
-        for sub in expiring:
-            async with async_session_factory() as session:
-                acc_result = await session.execute(
-                    select(ExchangeAccount).where(
-                        ExchangeAccount.id == sub.account_id
-                    )
-                )
-                account = acc_result.scalar_one_or_none()
-                if not account:
-                    continue
-
-                try:
-                    new_expiry = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
-                    async with GraphClient(account) as client:
-                        await client.patch(
-                            f"/subscriptions/{sub.external_subscription_id}",
-                            json={"expirationDateTime": new_expiry},
+        for account in accounts:
+            try:
+                async with async_session_factory() as session:
+                    cal_result = await session.execute(
+                        select(Calendar).where(
+                            Calendar.account_id == account.id,
+                            Calendar.is_active == True,
                         )
-
-                    sub.expires_at = datetime.now(timezone.utc) + timedelta(days=3)
-                    sub.updated_at = datetime.now(timezone.utc)
-                    await session.commit()
-                    logger.info("Subscription renewed", sub_id=sub.external_subscription_id)
-
-                except Exception as e:
-                    logger.error(
-                        "Failed to renew subscription, recreating",
-                        sub_id=str(sub.id),
-                        error=str(e),
                     )
-                    try:
-                        await _recreate_subscription(sub, account, session)
-                    except Exception as recreate_e:
-                        logger.error("Failed to recreate subscription", error=str(recreate_e))
-                        sub.status = "error"
-                        sub.updated_at = datetime.now(timezone.utc)
-                        await session.commit()
+                    calendars = cal_result.scalars().all()
 
-    asyncio.run(_run())
+                for calendar in calendars:
+                    ews_events = await list_events(
+                        account,
+                        calendar.external_calendar_id,
+                        window_start,
+                        window_end,
+                    )
+                    ews_ids = {e["id"] for e in ews_events if e.get("id")}
 
+                    async with async_session_factory() as session:
+                        db_result = await session.execute(
+                            select(Event).where(
+                                Event.calendar_id == calendar.id,
+                                Event.role == EventRole.PRIMARY,
+                                Event.deleted_at.is_(None),
+                                Event.start_at >= window_start,
+                            )
+                        )
+                        db_events = db_result.scalars().all()
 
-async def _recreate_subscription(sub, account, session) -> None:
-    """Recreate a failed subscription."""
-    from api.config import settings
-    from api.services.graph.client import GraphClient
-    from datetime import datetime, timedelta, timezone
+                    for db_event in db_events:
+                        if db_event.external_event_id not in ews_ids:
+                            # Event deleted in Exchange
+                            logger.info(
+                                "Detected external delete",
+                                event_id=str(db_event.id),
+                                external_id=db_event.external_event_id,
+                            )
+                            from api.services.events.event_service import handle_external_delete
+                            await handle_external_delete(db_event.external_event_id)
+                        else:
+                            # Check for updates by comparing changeKey
+                            ews_ev = next(
+                                (e for e in ews_events if e["id"] == db_event.external_event_id),
+                                None,
+                            )
+                            if ews_ev and ews_ev.get("changeKey") != db_event.last_seen_change_key:
+                                logger.info(
+                                    "Detected external update, syncing mirrors",
+                                    event_id=str(db_event.id),
+                                )
+                                await sync_mirror_to_primary(db_event.id)
+                                async with async_session_factory() as session:
+                                    ev = await session.get(Event, db_event.id)
+                                    if ev:
+                                        ev.last_seen_change_key = ews_ev.get("changeKey")
+                                        await session.commit()
 
-    new_expiry = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
-
-    body = {
-        "changeType": "created,updated,deleted",
-        "notificationUrl": f"{settings.api_base_url}/api/v1/webhooks/graph",
-        "resource": sub.resource,
-        "expirationDateTime": new_expiry,
-        "clientState": settings.internal_api_key,
-    }
-
-    async with GraphClient(account) as client:
-        new_sub = await client.post("/subscriptions", json=body)
-
-    sub.external_subscription_id = new_sub["id"]
-    sub.expires_at = datetime.now(timezone.utc) + timedelta(days=3)
-    sub.status = "active"
-    sub.updated_at = datetime.now(timezone.utc)
-    await session.commit()
-
-
-@app.task(name="worker.tasks.subscription_tasks.create_subscription_task")
-def create_subscription_task(user_id: str, account_id: str):
-    """Create a new Graph subscription for an account."""
-    async def _run():
-        from sqlalchemy import select
-        from api.config import settings
-        from api.db.session import async_session_factory
-        from api.models.exchange_account import ExchangeAccount
-        from api.models.graph_subscription import GraphSubscription
-        from api.services.graph.client import GraphClient
-        import uuid
-        from datetime import datetime, timedelta, timezone
-
-        async with async_session_factory() as session:
-            acc_result = await session.execute(
-                select(ExchangeAccount).where(ExchangeAccount.id == uuid.UUID(account_id))
-            )
-            account = acc_result.scalar_one_or_none()
-            if not account:
-                return
-
-            expiry = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
-            body = {
-                "changeType": "created,updated,deleted",
-                "notificationUrl": f"{settings.api_base_url}/api/v1/webhooks/graph",
-                "resource": "me/events",
-                "expirationDateTime": expiry,
-                "clientState": settings.internal_api_key,
-            }
-
-            async with GraphClient(account) as client:
-                graph_sub = await client.post("/subscriptions", json=body)
-
-            subscription = GraphSubscription(
-                user_id=uuid.UUID(user_id),
-                account_id=uuid.UUID(account_id),
-                resource="me/events",
-                external_subscription_id=graph_sub["id"],
-                expires_at=datetime.now(timezone.utc) + timedelta(days=3),
-                status="active",
-            )
-            session.add(subscription)
-            await session.commit()
-            logger.info("Subscription created", account_id=account_id)
+            except Exception as e:
+                logger.error(
+                    "Polling failed for account",
+                    account_email=account.email,
+                    error=str(e),
+                )
 
     asyncio.run(_run())

@@ -14,12 +14,14 @@ class ExchangeAccount(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    tenant_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     email: Mapped[str] = mapped_column(Text, nullable=False)
     display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
-    access_token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
-    refresh_token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
-    token_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # EWS connection
+    ews_server: Mapped[str] = mapped_column(Text, nullable=False)          # e.g. "mail.company.ru"
+    domain: Mapped[str | None] = mapped_column(Text, nullable=True)        # Windows domain, e.g. "CORP"
+    username_encrypted: Mapped[str] = mapped_column(Text, nullable=False)  # DOMAIN\user or UPN
+    password_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    auth_type: Mapped[str] = mapped_column(Text, nullable=False, server_default="NTLM")  # NTLM | basic | kerberos
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("NOW()"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("NOW()"))
@@ -29,17 +31,17 @@ class ExchangeAccount(Base):
     calendars: Mapped[list["Calendar"]] = relationship("Calendar", back_populates="account", cascade="all, delete-orphan")
 
     @property
-    def access_token(self) -> str:
-        return decrypt(self.access_token_encrypted)
+    def username(self) -> str:
+        return decrypt(self.username_encrypted)
 
-    @access_token.setter
-    def access_token(self, value: str) -> None:
-        self.access_token_encrypted = encrypt(value)
+    @username.setter
+    def username(self, value: str) -> None:
+        self.username_encrypted = encrypt(value)
 
     @property
-    def refresh_token(self) -> str:
-        return decrypt(self.refresh_token_encrypted)
+    def password(self) -> str:
+        return decrypt(self.password_encrypted)
 
-    @refresh_token.setter
-    def refresh_token(self, value: str) -> None:
-        self.refresh_token_encrypted = encrypt(value)
+    @password.setter
+    def password(self, value: str) -> None:
+        self.password_encrypted = encrypt(value)

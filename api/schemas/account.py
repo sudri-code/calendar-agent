@@ -8,20 +8,20 @@ class AccountResponse(BaseModel):
     id: uuid.UUID
     email: str
     display_name: Optional[str]
+    ews_server: str
+    domain: Optional[str]
+    auth_type: str
     status: str
-    token_expires_at: datetime
     created_at: datetime
 
     model_config = {"from_attributes": True}
 
 
-class OAuthStartResponse(BaseModel):
-    auth_url: str
-    state: str
-
-
-class OAuthCallbackParams(BaseModel):
-    code: str
-    state: str
-    error: Optional[str] = None
-    error_description: Optional[str] = None
+class AddAccountRequest(BaseModel):
+    email: str
+    ews_server: str              # e.g. "mail.company.ru"
+    username: str                # e.g. "CORP\\ivanov" or "ivanov@company.ru"
+    password: str
+    domain: Optional[str] = None
+    auth_type: str = "NTLM"     # NTLM | basic
+    display_name: Optional[str] = None

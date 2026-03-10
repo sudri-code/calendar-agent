@@ -10,12 +10,8 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://localhost:6379/0"
 
-    # Microsoft OAuth
-    ms_client_id: str = ""
-    ms_client_secret: str = ""
-    ms_redirect_uri: str = "http://localhost:8000/api/v1/accounts/oauth/callback"
-    ms_tenant_id: str = "common"
-    ms_scopes: str = "User.Read offline_access Calendars.ReadWrite Calendars.ReadWrite.Shared Contacts.Read"
+    # EWS (on-premises Exchange)
+    ews_verify_ssl: bool = True   # set False for self-signed corporate certs
 
     # Security
     encryption_key: str = ""
@@ -31,10 +27,6 @@ class Settings(BaseSettings):
     # App
     environment: str = "development"
     log_level: str = "INFO"
-
-    @property
-    def ms_scopes_list(self) -> list[str]:
-        return self.ms_scopes.split()
 
 
 settings = Settings()

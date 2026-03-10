@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.db.session import async_session_factory
 from api.models.calendar import Calendar
 from api.models.exchange_account import ExchangeAccount
-from api.services.graph.availability import get_schedule
+from api.services.ews.availability import get_schedule
 
 
 async def check_slot(

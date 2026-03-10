@@ -31,13 +31,13 @@ pytest -k "test_daily"                        # single test by name
 ### Running services locally (without Docker)
 ```bash
 # API
-cd api && uvicorn main:app --reload --port 8000
+PYTHONPATH=. uvicorn api.main:app --reload --port 8000
 
 # Bot
-cd bot && python main.py
+PYTHONPATH=. python bot/main.py
 
 # Celery worker + beat
-cd worker && celery -A celery_config worker --loglevel=info -B
+PYTHONPATH=. celery -A worker.celery_config worker --loglevel=info -B
 ```
 
 ## Architecture
@@ -49,21 +49,28 @@ The repo is a monorepo with four Python packages, each with its own `pyproject.t
 |---------|------|-------------|
 | `api/` | FastAPI backend — all business logic | `uvicorn api.main:app` |
 | `bot/` | aiogram 3 Telegram bot — UI only, calls API | `python bot/main.py` |
-| `worker/` | Celery + Beat — background jobs | `celery -A celery_config worker -B` |
+| `worker/` | Celery + Beat — background jobs | `celery -A worker.celery_config worker -B` |
 | `shared/` | Pydantic schemas + enums shared by all services | installed as editable dep |
 
 The bot never touches the database directly — it only calls the API via `bot/services/api_client.py` (`BotClient`, internal `X-Internal-Key` header).
 
+### Exchange integration: on-premises EWS, not Microsoft Graph
+The system uses **`exchangelib`** (Exchange Web Services) to connect to an on-premises Exchange Server. Azure AD and Microsoft Graph API are **not used**. Key points:
+- Auth is NTLM or Basic over HTTPS — credentials entered per-user via the bot, stored Fernet-encrypted in `exchange_accounts.username_encrypted` / `password_encrypted`
+- All EWS calls are synchronous (`exchangelib`) wrapped in `asyncio.run_in_executor` — see `api/services/ews/client.py::run_ews()`
+- There are **no webhooks** — change detection is done via EWS polling every 5 min (`worker/tasks/subscription_tasks.py::poll_calendar_changes_task`)
+- Self-signed corporate certs: set `EWS_VERIFY_SSL=false` in env
+
 ### Request flow
 1. Telegram → bot handler (aiogram FSM) → `BotClient.post(...)` → API
-2. API router → service layer → Graph API (via `GraphClient`) + DB (SQLAlchemy async)
-3. Microsoft Graph change → webhook `POST /api/v1/webhooks/graph` → Celery task → mirror sync
+2. API router → service layer → EWS (`exchangelib` via `api/services/ews/`) + DB (SQLAlchemy async)
+3. Celery Beat polls EWS every 5 min → detects changes → updates mirrors
 
 ### Key service files
-- `api/services/events/event_service.py` — create/delete orchestrator; acquires `redis_lock("sync_group:{user_id}")` before any write, then calls Graph API, then commits DB. On partial mirror failure sets `sync_group.state = DEGRADED`.
+- `api/services/ews/client.py` — `EWSClient`: builds `exchangelib.Account`, wraps sync calls in `run_in_executor`, raises `AuthExpiredError` on 401.
+- `api/services/events/event_service.py` — create/delete orchestrator; acquires `redis_lock("sync_group:{user_id}")` before any write, then calls EWS, then commits DB. On partial mirror failure sets `sync_group.state = DEGRADED`.
 - `api/services/events/mirror_service.py` — `sync_mirror_to_primary()` updates all mirror events to match primary; `repair_sync_group()` is called by daily reconciliation.
-- `api/services/events/recurrence_mapper.py` — bidirectional Graph `patternedRecurrence` ↔ RRULE. **All recurrence format conversions must go through here.**
-- `api/services/graph/client.py` — `GraphClient`: auto-refreshes token 5 min before expiry (with `redis_lock("token_refresh:{account_id}")`), retries 429 with `Retry-After`, raises typed exceptions on 401/403.
+- `api/services/events/recurrence_mapper.py` — bidirectional Graph `patternedRecurrence` ↔ RRULE (exchangelib uses its own recurrence objects internally; this mapper handles DB storage format). **All recurrence format conversions must go through here.**
 - `api/services/llm/parser.py` — calls OpenRouter with `response_format: json_object`, maintains per-user LLM session (up to 4 turns, 30-min TTL in `llm_sessions` table).
 
 ### Database / recurrence storage strategy
@@ -75,20 +82,23 @@ Every event belongs to a `sync_group`. Each group has exactly one `PRIMARY` even
 ### Celery Beat schedules
 | Task | Schedule |
 |------|----------|
-| `renew_expiring_subscriptions_task` | every 6 h |
+| `poll_calendar_changes_task` | every 5 min |
 | `reconcile_sync_groups_task` | daily 03:00 UTC |
 | `sync_all_contacts_task` | every 12 h |
 
 ### Bot FSM
 All conversation flows use aiogram FSM backed by `RedisStorage`. State groups live in `bot/states/`. The create flow branches at `choose_mode`: "текстом" calls `POST /api/v1/events/draft/parse` (LLM), "пошагово" collects fields step-by-step. Both paths converge at `choose_calendar` → `confirm` → `POST /api/v1/events`.
 
+Account connection flow (`bot/handlers/accounts.py::AddAccountStates`): server → email → username → password. The message containing the password is immediately deleted from the chat.
+
 ### Adding a new API endpoint
 1. Add route to the appropriate `api/routers/*.py`
 2. Add service logic under `api/services/`
-3. If the bot needs to call it, add a method/call in `bot/services/api_client.py` and a handler in `bot/handlers/`
+3. If EWS interaction is needed, add a method to `api/services/ews/client.py` and a thin wrapper in `api/services/ews/`
+4. If the bot needs to call it, add a method in `bot/services/api_client.py` and a handler in `bot/handlers/`
 
 ### Environment variables
-All required variables are documented in `.env.example`. The API reads them via `api/config.py` (`pydantic-settings`); the bot via `bot/config.py`. Generate `ENCRYPTION_KEY` with:
+All required variables are documented in `.env.example`. Exchange credentials are **not in env** — they are entered via the bot and stored encrypted in the DB. Generate `ENCRYPTION_KEY` with:
 ```python
 from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())
 ```

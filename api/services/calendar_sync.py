@@ -9,7 +9,7 @@ from api.db.session import async_session_factory
 from api.models.calendar import Calendar
 from api.models.exchange_account import ExchangeAccount
 from api.models.user import User
-from api.services.graph.calendars import list_calendars
+from api.services.ews.calendars import list_calendars
 
 logger = structlog.get_logger()
 
@@ -31,7 +31,6 @@ async def sync_calendars(user_id: uuid.UUID) -> list[Calendar]:
             try:
                 graph_calendars = await list_calendars(account)
                 for gc in graph_calendars:
-                    # Upsert calendar
                     cal_result = await session.execute(
                         select(Calendar).where(
                             Calendar.account_id == account.id,
@@ -42,7 +41,6 @@ async def sync_calendars(user_id: uuid.UUID) -> list[Calendar]:
 
                     if cal:
                         cal.name = gc.get("name", cal.name)
-                        cal.timezone = gc.get("timeZone", cal.timezone)
                         cal.updated_at = datetime.now(timezone.utc)
                     else:
                         cal = Calendar(
@@ -50,8 +48,7 @@ async def sync_calendars(user_id: uuid.UUID) -> list[Calendar]:
                             account_id=account.id,
                             external_calendar_id=gc["id"],
                             name=gc.get("name", "Unknown"),
-                            is_default=gc.get("isDefaultCalendar", False),
-                            timezone=gc.get("timeZone"),
+                            is_default=gc.get("is_default", False),
                         )
                         session.add(cal)
 

@@ -25,7 +25,6 @@ from api.models import (  # noqa: F401
     contact,
     event,
     sync_group,
-    graph_subscription,
     llm_session,
     operation_log,
 )

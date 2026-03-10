@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.db.session import async_session_factory
 from api.models.contact import Contact
 from api.models.exchange_account import ExchangeAccount
-from api.services.graph.contacts import list_contacts
+from api.services.ews.contacts import list_contacts
 
 logger = structlog.get_logger()
 

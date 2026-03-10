@@ -16,7 +16,7 @@ from api.models.event import Event
 from api.models.exchange_account import ExchangeAccount
 from api.models.sync_group import SyncGroup
 from api.services.events.mirror_service import build_mirror_body, sync_mirror_to_primary
-from api.services.graph.events import (
+from api.services.ews.events import (
     create_event as graph_create_event,
     delete_event as graph_delete_event,
     update_event as graph_update_event,

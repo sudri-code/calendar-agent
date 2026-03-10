@@ -12,7 +12,7 @@ from api.models.calendar import Calendar
 from api.models.event import Event
 from api.models.exchange_account import ExchangeAccount
 from api.models.sync_group import SyncGroup
-from api.services.graph.events import create_event, delete_event, update_event
+from api.services.ews.events import create_event, delete_event, update_event
 from shared.constants import EventRole, SyncGroupState
 
 logger = structlog.get_logger()

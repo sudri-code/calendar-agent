@@ -1,14 +1,14 @@
 # Telegram Calendar Sync Bot
 
-Telegram-бот для управления несколькими Exchange / Outlook-календарями через единый интерфейс.
+Telegram-бот для управления несколькими Exchange-календарями через единый интерфейс.
 
 **Ключевые возможности:**
-- Подключение нескольких Exchange-аккаунтов через Microsoft OAuth
+- Подключение нескольких корпоративных Exchange-аккаунтов (on-premises Exchange Server)
 - Создание встреч из свободного текста на русском языке (LLM через OpenRouter)
 - Автоматическое зеркалирование занятого слота во все остальные активные календари
-- Проверка занятости участников через Microsoft Graph `getSchedule`
+- Проверка занятости участников через EWS GetUserAvailability
 - Поддержка рекуррентных событий (ежедневно, еженедельно, ежемесячно, ежегодно) с режимами редактирования «только это / это и следующие / все»
-- Реального времени синхронизация изменений из Outlook через Graph webhooks
+- Отслеживание изменений из Outlook через периодический EWS-опрос (Celery Beat)
 - Поиск свободного слота с учётом участников встречи
 
 ---
@@ -19,12 +19,12 @@ Telegram-бот для управления несколькими Exchange / Ou
 |-----------|-----------|
 | Бот | Python 3.12, aiogram 3.x |
 | Backend API | FastAPI, SQLAlchemy 2 (async), asyncpg |
+| Exchange | `exchangelib` (EWS — Exchange Web Services) |
 | Фоновые задачи | Celery 5 + Celery Beat, Redis |
 | База данных | PostgreSQL 16 |
 | Кеш / очередь / FSM | Redis 7 |
-| Calendar API | Microsoft Graph API (delegated permissions) |
 | LLM | OpenRouter (настраиваемая модель, по умолчанию Claude Haiku) |
-| Шифрование токенов | Fernet (библиотека `cryptography`) |
+| Шифрование credentials | Fernet (библиотека `cryptography`) |
 
 ---
 
@@ -33,9 +33,11 @@ Telegram-бот для управления несколькими Exchange / Ou
 ### Предварительные требования
 
 - Docker и Docker Compose
-- Зарегистрированное приложение в [Azure Portal](https://portal.azure.com) с permissions: `User.Read`, `offline_access`, `Calendars.ReadWrite`, `Calendars.ReadWrite.Shared`, `Contacts.Read`
+- Доступ к on-premises Exchange Server (NTLM или Basic Auth через HTTPS)
 - Telegram-бот, созданный через [@BotFather](https://t.me/BotFather)
 - API-ключ [OpenRouter](https://openrouter.ai)
+
+**Azure и регистрация приложения не требуются.**
 
 ### 1. Клонирование и настройка окружения
 
@@ -45,29 +47,24 @@ cd calendar-agent
 cp .env.example .env
 ```
 
-Откройте `.env` и заполните обязательные переменные:
+Заполните в `.env`:
 
 ```bash
-# Telegram
-BOT_TOKEN=                    # токен от BotFather
-BOT_WEBHOOK_SECRET=           # произвольная строка для верификации webhook
-
-# Microsoft OAuth (из Azure Portal → App Registration)
-MS_CLIENT_ID=
-MS_CLIENT_SECRET=
-MS_REDIRECT_URI=https://yourdomain.com/api/v1/accounts/oauth/callback
-
-# OpenRouter
-OPENROUTER_API_KEY=
-
-# Генерируется один раз, не меняется после первого запуска:
-ENCRYPTION_KEY=               # см. раздел ниже
-INTERNAL_API_KEY=             # произвольная строка
+BOT_TOKEN=                   # токен от BotFather
+BOT_WEBHOOK_SECRET=          # произвольная строка
+OPENROUTER_API_KEY=          # ключ OpenRouter
+ENCRYPTION_KEY=              # см. ниже
+INTERNAL_API_KEY=            # произвольная строка
 ```
 
 **Генерация ENCRYPTION\_KEY:**
 ```bash
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Если Exchange использует самоподписанный сертификат, добавьте:
+```bash
+EWS_VERIFY_SSL=false
 ```
 
 ### 2. Запуск
@@ -76,13 +73,27 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 docker compose up --build
 ```
 
-При первом запуске Alembic автоматически применяет миграции. Все сервисы поднимаются в правильном порядке благодаря healthcheck-зависимостям.
+При первом запуске применяются все Alembic-миграции.
 
-Проверка работоспособности:
 ```bash
 curl http://localhost/health
 # {"status": "ok", "service": "calendar-agent-api"}
 ```
+
+### 3. Подключение Exchange-аккаунта
+
+Exchange-реквизиты вводятся через бота, **не через .env**:
+
+```
+/accounts → Подключить аккаунт
+
+Сервер:   mail.company.ru
+Email:    ivanov@company.ru
+Логин:    CORP\ivanov  (или ivanov@company.ru)
+Пароль:   ••••••
+```
+
+Бот проверяет подключение через EWS и сохраняет пароль в зашифрованном виде (Fernet). Сообщение с паролем немедленно удаляется из чата.
 
 ---
 
@@ -96,29 +107,23 @@ Telegram
 │   bot   │ ──────────────────────── ▶ │     api     │
 │ aiogram │                            │   FastAPI   │
 └─────────┘                            └──────┬──────┘
-                                              │
+                                              │ exchangelib (EWS)
                               ┌───────────────┼────────────────┐
                               ▼               ▼                ▼
-                         PostgreSQL        Redis         Microsoft
-                                                        Graph API
-                              ▲               ▲
-                              │               │
-                         ┌────┴──────────┐    │
-                         │    worker     │────┘
-                         │  Celery+Beat  │
+                         PostgreSQL        Redis         Exchange
+                                                         Server
+                              ▲               ▲         (on-prem)
+                              │               │              ▲
+                         ┌────┴──────────┐    │              │
+                         │    worker     │────┘    EWS polling│
+                         │  Celery+Beat  │─────────────────── ┘
                          └───────────────┘
-                              ▲
-                              │ webhook notifications
-                         Microsoft Graph
 ```
 
-**Бот** никогда не обращается к базе данных напрямую — только через HTTP к API с заголовком `X-Internal-Key`.
+**Обнаружение изменений** (вместо webhooks):
+Celery Beat каждые 5 минут опрашивает Exchange через EWS, сравнивает `changeKey` событий с БД и синхронизирует зеркала при расхождении.
 
-**Worker** обрабатывает:
-- Graph webhook-уведомления (обновление зеркал при изменении в Outlook)
-- Продление Graph-подписок (каждые 6 ч)
-- Ежедневная реконсиляция sync-групп (03:00 UTC)
-- Фоновая синхронизация контактов (каждые 12 ч)
+**Бот** никогда не обращается к БД напрямую — только через HTTP к API с заголовком `X-Internal-Key`.
 
 ---
 
@@ -152,18 +157,18 @@ Telegram
 ```
 Тема:    [Занято] Встреча с Иваном
 Тело:    Зеркальная блокировка. Основная встреча: «Встреча с Иваном»
-         в календаре «Work». Участники: ivan@example.com.
+         в календаре «Work». Участники: ivan@company.ru.
          Sync group: <uuid>.
 Статус:  Занят
 ```
 
-Любое изменение основного события автоматически распространяется на все зеркала. Если зеркало изменено вручную в Outlook — система восстанавливает его из источника истины (основного события).
+Любое изменение основного события автоматически распространяется на все зеркала. Если зеркало изменено вручную в Outlook — при следующем опросе система восстанавливает его из источника истины.
 
 ---
 
 ## Разработка
 
-### Установка зависимостей локально
+### Установка зависимостей
 
 ```bash
 pip install -e shared/ -e api/ -e bot/ -e worker/ -e ".[dev]"
@@ -185,23 +190,17 @@ PYTHONPATH=. celery -A worker.celery_config worker --loglevel=info -B
 ### Миграции базы данных
 
 ```bash
-# Применить все миграции
-PYTHONPATH=. alembic upgrade head
-
-# Создать новую миграцию
-PYTHONPATH=. alembic revision --autogenerate -m "add_field_x"
-
-# Откатить последнюю
-PYTHONPATH=. alembic downgrade -1
+PYTHONPATH=. alembic upgrade head          # применить все
+PYTHONPATH=. alembic revision --autogenerate -m "описание"
+PYTHONPATH=. alembic downgrade -1          # откатить последнюю
 ```
 
 ### Тесты
 
 ```bash
-pytest tests/                                   # все тесты
-pytest tests/unit/                              # только unit
-pytest tests/unit/test_recurrence_mapper.py     # один файл
-pytest -k "test_weekly"                         # по имени
+pytest tests/
+pytest tests/unit/test_recurrence_mapper.py
+pytest -k "test_weekly"
 ```
 
 ---
@@ -212,28 +211,15 @@ pytest -k "test_weekly"                         # по имени
 |------------|:---:|---------|
 | `BOT_TOKEN` | ✅ | Токен Telegram-бота |
 | `BOT_WEBHOOK_SECRET` | ✅ | Секрет для верификации webhook от Telegram |
-| `BOT_WEBHOOK_URL` | | URL для webhook-режима (без — работает polling) |
+| `BOT_WEBHOOK_URL` | | URL для webhook-режима (без — polling) |
 | `DATABASE_URL` | ✅ | `postgresql+asyncpg://...` |
 | `POSTGRES_PASSWORD` | ✅ | Пароль PostgreSQL |
 | `REDIS_URL` | ✅ | `redis://...` |
-| `MS_CLIENT_ID` | ✅ | Azure App Registration Client ID |
-| `MS_CLIENT_SECRET` | ✅ | Azure App Registration Client Secret |
-| `MS_REDIRECT_URI` | ✅ | OAuth callback URL |
-| `MS_TENANT_ID` | | `common` (мульти-тенант) или конкретный tenant ID |
 | `OPENROUTER_API_KEY` | ✅ | Ключ OpenRouter |
-| `OPENROUTER_MODEL` | | Модель (по умолч. `anthropic/claude-3-haiku`) |
-| `ENCRYPTION_KEY` | ✅ | Fernet-ключ для шифрования OAuth-токенов |
+| `OPENROUTER_MODEL` | | Модель LLM (по умолч. `anthropic/claude-3-haiku`) |
+| `ENCRYPTION_KEY` | ✅ | Fernet-ключ для шифрования паролей Exchange |
 | `INTERNAL_API_KEY` | ✅ | Секрет для внутренней аутентификации bot→api |
+| `EWS_VERIFY_SSL` | | `false` для самоподписанных сертификатов |
 | `API_BASE_URL` | | `http://api:8000` (внутри Docker) |
 
----
-
-## Требуемые разрешения Microsoft
-
-Минимальный набор delegated permissions для Azure App Registration:
-
-- `User.Read`
-- `offline_access`
-- `Calendars.ReadWrite`
-- `Calendars.ReadWrite.Shared`
-- `Contacts.Read`
+Exchange-реквизиты (сервер, логин, пароль) **хранятся в БД в зашифрованном виде** и вводятся через бот, а не через переменные окружения.
