@@ -6,6 +6,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import RedisStorage
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
 from bot.config import bot_settings
@@ -38,7 +39,7 @@ async def main():
     dp.include_router(accounts.router)
     dp.include_router(settings.router)
 
-    # Start bot — always delete webhook first to ensure clean state
+    # Always remove any previously registered webhook first
     await bot.delete_webhook(drop_pending_updates=True)
 
     if bot_settings.bot_webhook_url:
@@ -47,8 +48,20 @@ async def main():
             url=bot_settings.bot_webhook_url,
             secret_token=bot_settings.bot_webhook_secret,
         )
-        # Webhook requests are handled by nginx → bot HTTP server.
-        # Keep process alive without polling.
+        # Start aiohttp server to receive webhook updates from Telegram via nginx
+        app = web.Application()
+        SimpleRequestHandler(
+            dispatcher=dp,
+            bot=bot,
+            secret_token=bot_settings.bot_webhook_secret,
+        ).register(app, path="/webhook/telegram")
+        setup_application(app, dp, bot=bot)
+
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, host="0.0.0.0", port=8080)
+        await site.start()
+        logger.info("Webhook server listening", host="0.0.0.0", port=8080)
         await asyncio.Event().wait()
     else:
         logger.info("Starting bot in polling mode")
