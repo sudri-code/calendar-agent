@@ -37,12 +37,27 @@ async def cmd_settings(message: Message):
             text=label,
             callback_data=f"stg:mir:{cal['id']}:{new_val}",
         )
+    builder.button(text="🔄 Обновить список календарей", callback_data="stg:sync")
     builder.adjust(1)
 
     await message.answer(
         "Настройки календарей:\n(нажмите для переключения зеркалирования)",
         reply_markup=builder.as_markup(),
     )
+
+
+@router.callback_query(F.data == "stg:sync")
+async def sync_calendars(callback: CallbackQuery):
+    await callback.answer("Обновляю...")
+    try:
+        result = await api_client.post(
+            "/api/v1/calendars/sync",
+            params={"telegram_user_id": callback.from_user.id},
+        )
+        msg = result.get("message", "Готово") if isinstance(result, dict) else "Готово"
+        await callback.message.edit_text(f"✅ {msg}\n\nНажмите «Календари» чтобы обновить список.")
+    except Exception as e:
+        await callback.message.edit_text(f"Ошибка синхронизации: {e}")
 
 
 @router.callback_query(F.data.startswith("stg:mir:"))

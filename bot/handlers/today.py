@@ -85,21 +85,22 @@ def _format_event(event: dict) -> str:
 @router.message(Command("today"))
 @router.message(F.text == "Мой день")
 async def cmd_today(message: Message):
-    today = date.today().isoformat()
+    today = date.today()
     try:
         events = await api_client.get(
             "/api/v1/events/day",
-            params={"telegram_user_id": message.from_user.id, "date": today},
+            params={"telegram_user_id": message.from_user.id, "date": today.isoformat()},
         )
     except Exception as e:
         await message.answer(f"Ошибка при загрузке событий: {e}")
         return
 
+    today_fmt = today.strftime("%d.%m.%y")
     if not events:
-        await message.answer(f"На сегодня ({today}) событий нет.")
+        await message.answer(f"На сегодня ({today_fmt}) событий нет.")
         return
 
-    lines = [f"<b>События на {today}:</b>\n"]
+    lines = [f"<b>События на {today_fmt}:</b>\n"]
     for event in events:
         lines.append(_format_event(event))
 
