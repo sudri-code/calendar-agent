@@ -33,13 +33,17 @@ async def accounts_menu(message: Message):
 
 @router.callback_query(F.data == "accounts:connect")
 async def connect_account_start(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(AddAccountStates.enter_server)
-    await callback.message.edit_text(
-        "Введите адрес сервера Exchange (только hostname):\n\n"
-        "Пример: <code>mail.company.ru</code>",
-        parse_mode="HTML",
-    )
-    await callback.answer()
+    try:
+        await state.set_state(AddAccountStates.enter_server)
+        await callback.message.edit_text(
+            "Введите адрес сервера Exchange (только hostname):\n\n"
+            "Пример: <code>mail.company.ru</code>",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        await callback.message.answer(f"Ошибка: <code>{e}</code>", parse_mode="HTML")
+    finally:
+        await callback.answer()
 
 
 @router.message(AddAccountStates.enter_server, F.text)

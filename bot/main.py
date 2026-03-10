@@ -7,6 +7,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiogram.types import ErrorEvent
 from aiohttp import web
 
 from bot.config import bot_settings
@@ -26,6 +27,16 @@ async def main():
 
     storage = RedisStorage.from_url(bot_settings.redis_url)
     dp = Dispatcher(storage=storage)
+
+    # Global error handler for logging unhandled exceptions
+    @dp.errors()
+    async def error_handler(event: ErrorEvent):
+        logger.error(
+            "Unhandled exception in handler",
+            exception=str(event.exception),
+            update=str(event.update),
+            exc_info=event.exception,
+        )
 
     # Register routers
     dp.include_router(start.router)
