@@ -19,33 +19,24 @@ logger = structlog.get_logger()
 
 
 def build_mirror_body(primary: Event, primary_calendar_name: str) -> dict:
-    """Build the Graph event body for a mirror event."""
+    """Build the EWS event body for a mirror event."""
     attendees_str = ", ".join(
         a.get("emailAddress", {}).get("address", "") or a.get("email", "")
         for a in (primary.attendees_json or [])
     ) or "нет участников"
 
+    description = (
+        f"Зеркальная блокировка. Основная встреча: «{primary.title}» "
+        f"в календаре «{primary_calendar_name}». "
+        f"Участники: {attendees_str}. "
+        f"Sync group: {primary.sync_group_id}."
+    )
+
     return {
         "subject": f"[Занято] {primary.title}",
-        "body": {
-            "contentType": "text",
-            "content": (
-                f"Зеркальная блокировка. Основная встреча: «{primary.title}» "
-                f"в календаре «{primary_calendar_name}». "
-                f"Участники: {attendees_str}. "
-                f"Sync group: {primary.sync_group_id}."
-            ),
-        },
-        "start": {
-            "dateTime": primary.start_at.strftime("%Y-%m-%dT%H:%M:%S"),
-            "timeZone": primary.timezone,
-        },
-        "end": {
-            "dateTime": primary.end_at.strftime("%Y-%m-%dT%H:%M:%S"),
-            "timeZone": primary.timezone,
-        },
-        "showAs": "busy",
-        "isReminderOn": False,
+        "body": description,
+        "start": primary.start_at,
+        "end": primary.end_at,
         "attendees": [],
     }
 

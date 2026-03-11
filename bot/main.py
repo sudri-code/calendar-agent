@@ -12,7 +12,7 @@ from aiohttp import web
 
 from bot.config import bot_settings
 from bot.handlers import accounts
-from bot.handlers import start, today, week, create, create_recurrence, reschedule, delete, find_slot, settings
+from bot.handlers import start, today, week, create, create_recurrence, reschedule, delete, find_slot, settings, contacts
 
 logger = structlog.get_logger()
 
@@ -49,6 +49,7 @@ async def main():
     dp.include_router(find_slot.router)
     dp.include_router(accounts.router)
     dp.include_router(settings.router)
+    dp.include_router(contacts.router)
 
     # Always remove any previously registered webhook first
     await bot.delete_webhook(drop_pending_updates=True)

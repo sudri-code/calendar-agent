@@ -21,7 +21,7 @@ from api.schemas.event import (
 )
 from api.services.availability.availability_service import check_slot
 from api.services.availability.slot_finder import find_slots
-from api.services.events.event_service import create_event, delete_event
+from api.services.events.event_service import create_event, delete_event, update_event
 from api.services.ews.events import list_events
 
 logger = structlog.get_logger()
@@ -46,12 +46,14 @@ async def _fetch_ews_events(
             ews_events = await list_events(cal.account, cal.external_calendar_id, start, end)
             for e in ews_events:
                 events.append({
+                    "id": e.get("id") or "",
                     "title": e.get("subject") or "Без названия",
                     "start_at": e.get("start") or "",
                     "end_at": e.get("end") or "",
                     "attendees_json": e.get("attendees") or [],
                     "recurrence_rule": None,
                     "calendar_name": cal.name,
+                    "isRecurring": e.get("isRecurring", False),
                 })
         except Exception as e:
             logger.warning("Failed to fetch EWS events", calendar=cal.name, error=str(e))
@@ -126,6 +128,28 @@ async def create_event_endpoint(
     try:
         event = await create_event(user.id, request, session)
         return event
+    except MirrorSyncError as e:
+        raise HTTPException(
+            status_code=207,
+            detail={"message": str(e), "failed_calendars": e.failed_calendars},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.patch("/{event_id}", response_model=EventResponse)
+async def update_event_endpoint(
+    event_id: uuid.UUID,
+    request: UpdateEventRequest,
+    telegram_user_id: int = Query(...),
+    session: AsyncSession = Depends(get_async_session),
+):
+    user = await get_or_create_user(telegram_user_id, session)
+    try:
+        event = await update_event(user.id, event_id, request, session)
+        return event
+    except EventNotFoundError:
+        raise HTTPException(status_code=404, detail="Event not found")
     except MirrorSyncError as e:
         raise HTTPException(
             status_code=207,

@@ -30,6 +30,7 @@ async def cmd_delete(message: Message, state: FSMContext):
         await message.answer("Нет событий для удаления.")
         return
 
+    await state.update_data(events_cache={e["id"] if isinstance(e, dict) else str(e): e for e in events} if isinstance(events, list) else {})
     await state.set_state(DeleteStates.choose_event)
     await message.answer(
         "Выберите встречу для удаления:",
@@ -40,12 +41,30 @@ async def cmd_delete(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("event:delete:"), DeleteStates.choose_event)
 async def delete_event_selected(callback: CallbackQuery, state: FSMContext):
     event_id = callback.data.split(":", 2)[2]
+    data = await state.get_data()
+    events_cache = data.get("events_cache", {})
+    event_data = events_cache.get(event_id, {})
+    is_recurring = event_data.get("isRecurring", False)
+
     await state.update_data(event_id=event_id)
-    await state.set_state(DeleteStates.choose_recurrence_mode)
-    await callback.message.edit_text(
-        "Это повторяющееся событие. Что удалить?",
-        reply_markup=build_recurrence_mode_keyboard(),
-    )
+
+    if is_recurring:
+        await state.set_state(DeleteStates.choose_recurrence_mode)
+        await callback.message.edit_text(
+            "Это повторяющееся событие. Что удалить?",
+            reply_markup=build_recurrence_mode_keyboard(),
+        )
+    else:
+        await state.update_data(recurrence_delete_mode="single")
+        builder = InlineKeyboardBuilder()
+        builder.button(text="Удалить", callback_data="delete:confirm")
+        builder.button(text="Отмена", callback_data="delete:cancel")
+        builder.adjust(2)
+        await state.set_state(DeleteStates.confirm)
+        await callback.message.edit_text(
+            "Вы уверены, что хотите удалить встречу?",
+            reply_markup=builder.as_markup(),
+        )
     await callback.answer()
 
 

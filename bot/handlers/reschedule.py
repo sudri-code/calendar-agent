@@ -30,6 +30,7 @@ async def cmd_reschedule(message: Message, state: FSMContext):
         await message.answer("Нет событий для переноса.")
         return
 
+    await state.update_data(events_cache={e["id"] if isinstance(e, dict) else str(e): e for e in events} if isinstance(events, list) else {})
     await state.set_state(RescheduleStates.choose_event)
     await message.answer(
         "Выберите встречу для переноса:",
@@ -40,19 +41,42 @@ async def cmd_reschedule(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("event:reschedule:"), RescheduleStates.choose_event)
 async def reschedule_event_selected(callback: CallbackQuery, state: FSMContext):
     event_id = callback.data.split(":", 2)[2]
-    await state.update_data(event_id=event_id)
+    data = await state.get_data()
 
-    # Check if recurring (simplified check - just ask)
-    builder_text = (
-        "Это повторяющееся событие. Что изменить?"
-        if True  # simplified
-        else "Выберите новую дату:"
-    )
-    await state.set_state(RescheduleStates.choose_recurrence_mode)
-    await callback.message.edit_text(
-        "Это повторяющееся событие. Что изменить?",
-        reply_markup=build_recurrence_mode_keyboard(),
-    )
+    # Compute original duration from cached events
+    events_cache = data.get("events_cache", {})
+    event_data = events_cache.get(event_id, {})
+    original_duration_minutes = 60  # fallback
+    is_recurring = event_data.get("isRecurring", False)
+    try:
+        start_str = event_data.get("start_at") or event_data.get("start", "")
+        end_str = event_data.get("end_at") or event_data.get("end", "")
+        if start_str and end_str:
+            from datetime import timezone as tz_module
+            start_dt = datetime.fromisoformat(start_str)
+            end_dt = datetime.fromisoformat(end_str)
+            diff = int((end_dt - start_dt).total_seconds() / 60)
+            if diff > 0:
+                original_duration_minutes = diff
+    except Exception:
+        pass
+
+    await state.update_data(event_id=event_id, original_duration_minutes=original_duration_minutes)
+
+    if is_recurring:
+        await state.set_state(RescheduleStates.choose_recurrence_mode)
+        await callback.message.edit_text(
+            "Это повторяющееся событие. Что изменить?",
+            reply_markup=build_recurrence_mode_keyboard(),
+        )
+    else:
+        await state.update_data(recurrence_edit_mode="single")
+        today = date.today()
+        await state.set_state(RescheduleStates.choose_date)
+        await callback.message.edit_text(
+            "Выберите новую дату:",
+            reply_markup=build_calendar_keyboard(today.year, today.month),
+        )
     await callback.answer()
 
 
@@ -131,7 +155,8 @@ async def reschedule_confirm(callback: CallbackQuery, state: FSMContext):
     mode = data.get("recurrence_edit_mode", "single")
 
     new_start = datetime.strptime(f"{new_date}T{new_time}:00", "%Y-%m-%dT%H:%M:%S")
-    new_end = new_start + timedelta(hours=1)
+    duration_minutes = data.get("original_duration_minutes", 60)
+    new_end = new_start + timedelta(minutes=duration_minutes)
 
     try:
         await api_client.patch(

@@ -201,7 +201,7 @@ async def create_event(
                     role=EventRole.MIRROR,
                     status="active",
                     title=f"[Занято] {draft.title}",
-                    description=mirror_graph_body["body"]["content"],
+                    description=mirror_graph_body["body"],
                     start_at=draft.start_at,
                     end_at=draft.end_at,
                     timezone=draft.timezone,
@@ -318,6 +318,63 @@ async def delete_event(
     finally:
         if should_close:
             await session_ctx.__aexit__(None, None, None)
+
+
+async def update_event(
+    user_id: uuid.UUID,
+    event_id: uuid.UUID,
+    patch: EventPatch,
+    session: AsyncSession,
+) -> Event:
+    """Update primary event in EWS and sync all mirrors."""
+    result = await session.execute(
+        select(Event).where(
+            Event.id == event_id,
+            Event.user_id == user_id,
+            Event.deleted_at.is_(None),
+        )
+    )
+    event = result.scalar_one_or_none()
+    if not event:
+        raise EventNotFoundError(f"Event {event_id} not found")
+
+    cal_result = await session.execute(
+        select(Calendar).where(Calendar.id == event.calendar_id)
+    )
+    calendar = cal_result.scalar_one()
+    account = await _get_account_for_calendar(session, calendar)
+
+    patch_body = {}
+    if patch.start_at is not None:
+        patch_body["start"] = patch.start_at
+        event.start_at = patch.start_at
+    if patch.end_at is not None:
+        patch_body["end"] = patch.end_at
+        event.end_at = patch.end_at
+    if patch.title is not None:
+        patch_body["subject"] = patch.title
+        event.title = patch.title
+    if patch.description is not None:
+        patch_body["body"] = patch.description
+        event.description = patch.description
+
+    if patch_body:
+        await graph_update_event(
+            account,
+            calendar.external_calendar_id,
+            event.external_event_id,
+            patch_body,
+        )
+
+    event.updated_at = datetime.now(timezone.utc)
+    await session.commit()
+
+    try:
+        await sync_mirror_to_primary(event.id)
+    except MirrorSyncError:
+        raise
+
+    return event
 
 
 async def handle_external_delete(external_event_id: str) -> None:
