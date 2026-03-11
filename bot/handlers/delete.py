@@ -124,22 +124,34 @@ async def delete_cancel(callback: CallbackQuery, state: FSMContext):
 
 async def handle_free_slot_intent(message: Message, state: FSMContext, result: dict):
     """Handle 'free_slot' intent: show overlapping events and offer to delete them."""
-    raw = result.get("raw") or {}
-    date_range = raw.get("date_range") or {}
-    start_time = raw.get("start_time")
-    duration = raw.get("duration_minutes") or 60
+    # Primary: use already-parsed draft (most reliable)
+    draft = result.get("draft")
+    slot_start = slot_end = None
+    if draft and draft.get("start_at"):
+        try:
+            slot_start = datetime.fromisoformat(draft["start_at"])
+            slot_end = datetime.fromisoformat(draft["end_at"])
+        except Exception:
+            pass
 
-    date_str = date_range.get("from")
-    if not date_str or not start_time:
-        await message.answer("Не смог определить дату или время. Попробуйте уточнить.")
-        return
+    # Fallback: parse from raw LLM fields
+    if not slot_start:
+        raw = result.get("raw") or {}
+        date_range = raw.get("date_range") or {}
+        start_time = raw.get("start_time")
+        duration = raw.get("duration_minutes") or 60
+        date_str = date_range.get("from")
+        if not date_str or not start_time:
+            await message.answer("Не смог определить дату или время. Попробуйте уточнить.")
+            return
+        try:
+            slot_start = datetime.fromisoformat(f"{date_str}T{start_time}:00")
+            slot_end = slot_start + timedelta(minutes=int(duration))
+        except Exception:
+            await message.answer("Не смог разобрать время. Попробуйте уточнить.")
+            return
 
-    try:
-        slot_start = datetime.fromisoformat(f"{date_str}T{start_time}:00")
-        slot_end = slot_start + timedelta(minutes=int(duration))
-    except Exception:
-        await message.answer("Не смог разобрать время. Попробуйте уточнить.")
-        return
+    date_str = slot_start.strftime("%Y-%m-%d")
 
     try:
         events = await api_client.get(
