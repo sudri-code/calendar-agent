@@ -1,4 +1,5 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import re
 from aiogram import Router, F
 from aiogram.filters import Command
@@ -7,6 +8,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.services.api_client import api_client
+from bot.config import bot_settings
 from bot.states.slot_states import SlotStates
 
 router = Router()
@@ -138,11 +140,15 @@ async def slot_duration_picked(callback: CallbackQuery, state: FSMContext):
     await state.update_data(found_slots=slots)
     await state.set_state(SlotStates.review_options)
 
+    tz = ZoneInfo(bot_settings.ews_timezone)
     builder = InlineKeyboardBuilder()
     for i, slot in enumerate(slots[:8]):
         try:
-            start = datetime.fromisoformat(slot["start_at"])
-            label = start.strftime("%d.%m %H:%M")
+            start = datetime.fromisoformat(slot["start_at"].replace("Z", "+00:00"))
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            start_local = start.astimezone(tz)
+            label = start_local.strftime("%d.%m %H:%M")
         except Exception:
             label = f"Слот {i + 1}"
         builder.button(text=label, callback_data=f"slot:pick:{i}")
@@ -171,8 +177,15 @@ async def slot_picked(callback: CallbackQuery, state: FSMContext):
     await state.update_data(chosen_slot=chosen_slot)
 
     try:
-        start = datetime.fromisoformat(chosen_slot["start_at"])
-        end = datetime.fromisoformat(chosen_slot["end_at"])
+        tz = ZoneInfo(bot_settings.ews_timezone)
+        start = datetime.fromisoformat(chosen_slot["start_at"].replace("Z", "+00:00"))
+        end = datetime.fromisoformat(chosen_slot["end_at"].replace("Z", "+00:00"))
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        start_local = start.astimezone(tz)
+        end_local = end.astimezone(tz)
     except Exception:
         await callback.message.edit_text("Ошибка при выборе слота.")
         await state.clear()
@@ -186,7 +199,7 @@ async def slot_picked(callback: CallbackQuery, state: FSMContext):
 
     await state.set_state(SlotStates.confirm_create)
     await callback.message.edit_text(
-        f"Слот: {start.strftime('%d.%m.%y %H:%M')} – {end.strftime('%H:%M')}\n"
+        f"Слот: {start_local.strftime('%d.%m.%y %H:%M')} – {end_local.strftime('%H:%M')}\n"
         "Создать встречу в этот слот?",
         reply_markup=builder.as_markup(),
     )

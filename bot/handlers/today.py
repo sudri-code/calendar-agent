@@ -1,9 +1,11 @@
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message
 
 from bot.services.api_client import api_client
+from bot.config import bot_settings
 
 router = Router()
 
@@ -58,9 +60,17 @@ def _format_event(event: dict) -> str:
     end_at = event.get("end_at", "")
 
     try:
+        tz = ZoneInfo(bot_settings.ews_timezone)
+        # Нормализуем ISO-строку и считаем, что сервер отдаёт время в UTC
         start = datetime.fromisoformat(start_at.replace("Z", "+00:00"))
         end = datetime.fromisoformat(end_at.replace("Z", "+00:00"))
-        time_str = f"{start.strftime('%H:%M')} – {end.strftime('%H:%M')}"
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        start_local = start.astimezone(tz)
+        end_local = end.astimezone(tz)
+        time_str = f"{start_local.strftime('%H:%M')} – {end_local.strftime('%H:%M')}"
     except Exception:
         time_str = ""
 

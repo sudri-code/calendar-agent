@@ -12,6 +12,9 @@ class BotSettings(BaseSettings):
     api_base_url: str = "http://api:8000"
     internal_api_key: str = "internal-key"
 
+    # IANA timezone for displaying dates/times to the user
+    ews_timezone: str = "Europe/Moscow"
+
     environment: str = "development"
     log_level: str = "INFO"
 

@@ -1,14 +1,17 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from zoneinfo import ZoneInfo
+
 from bot.keyboards.inline_calendar import build_calendar_keyboard, build_time_grid_keyboard
 from bot.keyboards.recurrence_keyboard import build_recurrence_choice_keyboard
 from bot.services.api_client import api_client
 from bot.states.create_states import CreateEventStates
+from bot.config import bot_settings
 
 router = Router()
 
@@ -141,13 +144,22 @@ async def handle_text_input(message: Message, state: FSMContext):
             start = datetime.fromisoformat(draft["start_at"])
             end = datetime.fromisoformat(draft["end_at"])
 
+            # Приводим время к часовому поясу бота для отображения
+            tz = ZoneInfo(bot_settings.ews_timezone)
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            if end.tzinfo is None:
+                end = end.replace(tzinfo=timezone.utc)
+            start_local = start.astimezone(tz)
+            end_local = end.astimezone(tz)
+
             att_names = [a.get("name") or a.get("email", "") for a in (draft.get("attendees") or []) if a.get("email") and not a.get("email", "").endswith("@unknown")]
             att_str = f"\n<b>Участники:</b> {', '.join(att_names)}" if att_names else ""
 
             preview = (
                 f"<b>Встреча:</b> {draft.get('title')}\n"
-                f"<b>Начало:</b> {start.strftime('%d.%m.%y %H:%M')}\n"
-                f"<b>Конец:</b> {end.strftime('%H:%M')}\n"
+                f"<b>Начало:</b> {start_local.strftime('%d.%m.%y %H:%M')}\n"
+                f"<b>Конец:</b> {end_local.strftime('%H:%M')}\n"
                 f"{att_str}"
                 f"{rec_str}"
             )
@@ -361,6 +373,14 @@ def _get_start_end_title(data: dict) -> tuple[datetime, datetime, str]:
 
 
 def _build_confirm_text(title: str, start: datetime, end: datetime, data: dict) -> str:
+    # Преобразуем к часовому поясу бота только для отображения
+    tz = ZoneInfo(bot_settings.ews_timezone)
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    start_local = start.astimezone(tz)
+    end_local = end.astimezone(tz)
     recurrence = data.get("recurrence")
     rec_str = ""
     if recurrence:
@@ -378,8 +398,8 @@ def _build_confirm_text(title: str, start: datetime, end: datetime, data: dict) 
     return (
         f"<b>Подтвердите создание встречи:</b>\n\n"
         f"<b>Название:</b> {title}\n"
-        f"<b>Начало:</b> {start.strftime('%d.%m.%y %H:%M')}\n"
-        f"<b>Конец:</b> {end.strftime('%H:%M')}\n"
+        f"<b>Начало:</b> {start_local.strftime('%d.%m.%y %H:%M')}\n"
+        f"<b>Конец:</b> {end_local.strftime('%H:%M')}\n"
         f"{att_str}{rec_str}"
     )
 
@@ -387,7 +407,17 @@ def _build_confirm_text(title: str, start: datetime, end: datetime, data: dict) 
 def _format_conflict_avail(conflict: dict) -> str:
     s = _parse_dt(conflict.get("start"))
     e = _parse_dt(conflict.get("end"))
-    time_str = f" ({s.strftime('%H:%M')}–{e.strftime('%H:%M')})" if s and e else ""
+    if s and e:
+        tz = ZoneInfo(bot_settings.ews_timezone)
+        if s.tzinfo is None:
+            s = s.replace(tzinfo=timezone.utc)
+        if e.tzinfo is None:
+            e = e.replace(tzinfo=timezone.utc)
+        s_local = s.astimezone(tz)
+        e_local = e.astimezone(tz)
+        time_str = f" ({s_local.strftime('%H:%M')}–{e_local.strftime('%H:%M')})"
+    else:
+        time_str = ""
     email = conflict.get("email", "")
     return f"👤 {email}{time_str}"
 
@@ -421,11 +451,21 @@ async def _show_confirm(message, state: FSMContext):
 
     if conflicts:
         conflict_lines = "\n".join(_format_conflict_avail(c) for c in conflicts[:5])
+        # Для отображения переведём время в локальный часовой пояс
+        tz = ZoneInfo(bot_settings.ews_timezone)
+        start_disp = start
+        end_disp = end
+        if start_disp.tzinfo is None:
+            start_disp = start_disp.replace(tzinfo=timezone.utc)
+        if end_disp.tzinfo is None:
+            end_disp = end_disp.replace(tzinfo=timezone.utc)
+        start_disp = start_disp.astimezone(tz)
+        end_disp = end_disp.astimezone(tz)
         text = (
             f"⚠️ <b>В это время есть занятость:</b>\n\n"
             f"{conflict_lines}\n\n"
             f"<b>Планируемая встреча:</b> {title}\n"
-            f"{start.strftime('%d.%m.%y %H:%M')} – {end.strftime('%H:%M')}"
+            f"{start_disp.strftime('%d.%m.%y %H:%M')} – {end_disp.strftime('%H:%M')}"
         )
         builder = InlineKeyboardBuilder()
         builder.button(text="Создать всё равно", callback_data="conflict:proceed")
@@ -539,7 +579,14 @@ async def conflict_show_slots(callback: CallbackQuery, state: FSMContext):
         s = _parse_dt(slot.get("start_at"))
         e = _parse_dt(slot.get("end_at"))
         if s and e:
-            label = f"{s.strftime('%d.%m %H:%M')} – {e.strftime('%H:%M')}"
+            tz = ZoneInfo(bot_settings.ews_timezone)
+            if s.tzinfo is None:
+                s = s.replace(tzinfo=timezone.utc)
+            if e.tzinfo is None:
+                e = e.replace(tzinfo=timezone.utc)
+            s_local = s.astimezone(tz)
+            e_local = e.astimezone(tz)
+            label = f"{s_local.strftime('%d.%m %H:%M')} – {e_local.strftime('%H:%M')}"
             builder.button(text=label, callback_data=f"slot:pick:{idx}")
     builder.button(text="Отмена", callback_data="confirm:cancel")
     builder.adjust(1)
