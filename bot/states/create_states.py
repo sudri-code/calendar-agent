@@ -18,6 +18,7 @@ class CreateEventStates(StatesGroup):
     recurrence_end_date = State()
     recurrence_count = State()
     confirm = State()
+    conflict = State()
     completed = State()
 
 

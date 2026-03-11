@@ -255,6 +255,17 @@ def _calendar_item_to_dict(item, local_tz=None) -> dict:
         dt = ews_dt.astimezone(local_tz) if local_tz else ews_dt
         return dt.isoformat()
 
+    attendees = []
+    for field in ("required_attendees", "optional_attendees"):
+        group = getattr(item, field, None) or []
+        for a in group:
+            mb = getattr(a, "mailbox", None)
+            if mb:
+                name = getattr(mb, "name", "") or ""
+                email = getattr(mb, "email_address", "") or ""
+                if email:
+                    attendees.append({"name": name, "email": email})
+
     return {
         "id": getattr(item, "id", ""),
         "changeKey": getattr(item, "changekey", ""),
@@ -262,6 +273,7 @@ def _calendar_item_to_dict(item, local_tz=None) -> dict:
         "body": str(getattr(item, "body", "") or ""),
         "start": _fmt(item.start),
         "end": _fmt(item.end),
+        "attendees": attendees,
         "isRecurring": getattr(item, "is_recurring", False),
         "recurrence": getattr(item, "recurrence", None),
         "type": getattr(item, "type", "singleInstance"),

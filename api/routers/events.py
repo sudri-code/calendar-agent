@@ -49,7 +49,7 @@ async def _fetch_ews_events(
                     "title": e.get("subject") or "Без названия",
                     "start_at": e.get("start") or "",
                     "end_at": e.get("end") or "",
-                    "attendees_json": [],
+                    "attendees_json": e.get("attendees") or [],
                     "recurrence_rule": None,
                     "calendar_name": cal.name,
                 })

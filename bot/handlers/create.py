@@ -12,6 +12,39 @@ from bot.states.create_states import CreateEventStates
 
 router = Router()
 
+
+def _parse_dt(s: str) -> datetime | None:
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def _overlaps(s1: datetime, e1: datetime, s2: datetime, e2: datetime) -> bool:
+    """True if [s1,e1) and [s2,e2) overlap."""
+    s1 = s1.replace(tzinfo=None) if s1.tzinfo else s1
+    e1 = e1.replace(tzinfo=None) if e1.tzinfo else e1
+    s2 = s2.replace(tzinfo=None) if s2.tzinfo else s2
+    e2 = e2.replace(tzinfo=None) if e2.tzinfo else e2
+    return s1 < e2 and s2 < e1
+
+
+def _format_conflict(event: dict) -> str:
+    s = _parse_dt(event.get("start_at", ""))
+    e = _parse_dt(event.get("end_at", ""))
+    time_str = ""
+    if s and e:
+        time_str = f" ({s.strftime('%H:%M')}–{e.strftime('%H:%M')})"
+    title = event.get("title", "Без названия")
+    attendees = event.get("attendees_json") or []
+    att_str = ""
+    if 0 < len(attendees) < 5:
+        names = [a.get("name") or a.get("email", "") for a in attendees]
+        att_str = f"\n   👥 {', '.join(names)}"
+    return f"📅 {title}{time_str}{att_str}"
+
 DURATION_OPTIONS = [
     ("15 мин", 15), ("30 мин", 30), ("45 мин", 45),
     ("1 час", 60), ("1.5 ч", 90), ("2 часа", 120),
@@ -35,6 +68,7 @@ async def cmd_create(message: Message, state: FSMContext):
     builder.adjust(2)
 
     await state.set_state(CreateEventStates.choose_mode)
+    await state.update_data(telegram_user_id=message.from_user.id)
     await message.answer(
         "Как создать встречу?",
         reply_markup=builder.as_markup(),
@@ -328,27 +362,22 @@ async def recurrence_simple(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-async def _show_confirm(message, state: FSMContext):
-    data = await state.get_data()
-
+def _get_start_end_title(data: dict) -> tuple[datetime, datetime, str]:
     if data.get("draft"):
-        # Text mode
         draft = data["draft"]
-        start = datetime.fromisoformat(draft["start_at"])
-        end = datetime.fromisoformat(draft["end_at"])
-        title = draft.get("title", "Встреча")
-        cal_id = data.get("calendar_id", "?")
-    else:
-        # Step mode
-        chosen_date = data.get("chosen_date", "")
-        chosen_time = data.get("chosen_time", "09:00")
-        duration = data.get("duration", 60)
-        title = data.get("title", "Встреча")
-        h, m = map(int, chosen_time.split(":"))
-        start = datetime.strptime(f"{chosen_date}T{chosen_time}:00", "%Y-%m-%dT%H:%M:%S")
-        end = start + timedelta(minutes=duration)
-        cal_id = data.get("calendar_id", "?")
+        return (
+            datetime.fromisoformat(draft["start_at"]),
+            datetime.fromisoformat(draft["end_at"]),
+            draft.get("title", "Встреча"),
+        )
+    chosen_date = data.get("chosen_date", "")
+    chosen_time = data.get("chosen_time", "09:00")
+    duration = data.get("duration", 60)
+    start = datetime.strptime(f"{chosen_date}T{chosen_time}:00", "%Y-%m-%dT%H:%M:%S")
+    return start, start + timedelta(minutes=duration), data.get("title", "Встреча")
 
+
+def _build_confirm_text(title: str, start: datetime, end: datetime, data: dict) -> str:
     recurrence = data.get("recurrence")
     rec_str = ""
     if recurrence:
@@ -358,58 +387,92 @@ async def _show_confirm(message, state: FSMContext):
         }
         rec_str = f"\n🔁 Повторяется {freq_labels.get(recurrence.get('frequency'), recurrence.get('frequency', ''))}"
 
-    # Attendees
-    if data.get("draft"):
-        raw_att = data["draft"].get("attendees") or []
-    else:
-        raw_att = data.get("attendees") or []
-    att_names = [a.get("name") or a.get("email", "") for a in raw_att if a.get("email") and not a.get("email", "").endswith("@unknown")]
+    raw_att = (data.get("draft") or {}).get("attendees") or data.get("attendees") or []
+    att_names = [a.get("name") or a.get("email", "") for a in raw_att
+                 if a.get("email") and not a.get("email", "").endswith("@unknown")]
     att_str = f"\n<b>Участники:</b> {', '.join(att_names)}" if att_names else ""
 
-    confirm_text = (
+    return (
         f"<b>Подтвердите создание встречи:</b>\n\n"
         f"<b>Название:</b> {title}\n"
         f"<b>Начало:</b> {start.strftime('%d.%m.%y %H:%M')}\n"
         f"<b>Конец:</b> {end.strftime('%H:%M')}\n"
-        f"{att_str}"
-        f"{rec_str}"
+        f"{att_str}{rec_str}"
     )
 
-    builder = InlineKeyboardBuilder()
-    builder.button(text="Создать", callback_data="confirm:create")
-    builder.button(text="Отмена", callback_data="confirm:cancel")
-    builder.adjust(2)
 
-    await state.set_state(CreateEventStates.confirm)
-    await message.answer(confirm_text, reply_markup=builder.as_markup(), parse_mode="HTML")
-
-
-@router.callback_query(F.data == "confirm:create", CreateEventStates.confirm)
-async def confirm_create(callback: CallbackQuery, state: FSMContext):
+async def _show_confirm(message, state: FSMContext):
     data = await state.get_data()
+    start, end, title = _get_start_end_title(data)
+    tg_uid = data.get("telegram_user_id") or message.chat.id
 
+    # Check availability
+    conflicts = []
+    try:
+        day_events = await api_client.get(
+            "/api/v1/events/day",
+            params={"telegram_user_id": tg_uid, "date": start.strftime("%Y-%m-%d")},
+        )
+        for ev in day_events:
+            es = _parse_dt(ev.get("start_at", ""))
+            ee = _parse_dt(ev.get("end_at", ""))
+            if es and ee and _overlaps(start, end, es, ee):
+                conflicts.append(ev)
+    except Exception:
+        pass
+
+    if conflicts:
+        conflict_lines = "\n".join(_format_conflict(c) for c in conflicts[:5])
+        text = (
+            f"⚠️ <b>В это время уже есть события:</b>\n\n"
+            f"{conflict_lines}\n\n"
+            f"<b>Планируемая встреча:</b> {title}\n"
+            f"{start.strftime('%d.%m.%y %H:%M')} – {end.strftime('%H:%M')}"
+        )
+        builder = InlineKeyboardBuilder()
+        builder.button(text="Создать всё равно", callback_data="conflict:proceed")
+        builder.button(text="Другие слоты", callback_data="conflict:slots")
+        builder.button(text="Отмена", callback_data="confirm:cancel")
+        builder.adjust(1)
+        await state.set_state(CreateEventStates.conflict)
+        await message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+    else:
+        confirm_text = _build_confirm_text(title, start, end, data)
+        builder = InlineKeyboardBuilder()
+        builder.button(text="Создать", callback_data="confirm:create")
+        builder.button(text="Отмена", callback_data="confirm:cancel")
+        builder.adjust(2)
+        await state.set_state(CreateEventStates.confirm)
+        await message.answer(confirm_text, reply_markup=builder.as_markup(), parse_mode="HTML")
+
+
+def _build_draft_payload(data: dict) -> dict:
     if data.get("draft"):
-        draft = data["draft"]
+        draft = dict(data["draft"])
         draft["calendar_id"] = data.get("calendar_id")
         if data.get("recurrence"):
             draft["recurrence"] = data["recurrence"]
-    else:
-        chosen_date = data.get("chosen_date", "")
-        chosen_time = data.get("chosen_time", "09:00")
-        duration = data.get("duration", 60)
-        start = datetime.strptime(f"{chosen_date}T{chosen_time}:00", "%Y-%m-%dT%H:%M:%S")
-        end = start + timedelta(minutes=duration)
-        draft = {
-            "title": data.get("title", "Встреча"),
-            "start_at": start.isoformat(),
-            "end_at": end.isoformat(),
-            "timezone": "UTC",
-            "description": data.get("description"),
-            "attendees": data.get("attendees", []),
-            "calendar_id": data.get("calendar_id"),
-            "recurrence": data.get("recurrence"),
-        }
+        return draft
+    chosen_date = data.get("chosen_date", "")
+    chosen_time = data.get("chosen_time", "09:00")
+    duration = data.get("duration", 60)
+    start = datetime.strptime(f"{chosen_date}T{chosen_time}:00", "%Y-%m-%dT%H:%M:%S")
+    end = start + timedelta(minutes=duration)
+    return {
+        "title": data.get("title", "Встреча"),
+        "start_at": start.isoformat(),
+        "end_at": end.isoformat(),
+        "timezone": "UTC",
+        "description": data.get("description"),
+        "attendees": data.get("attendees", []),
+        "calendar_id": data.get("calendar_id"),
+        "recurrence": data.get("recurrence"),
+    }
 
+
+async def _do_create(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    draft = _build_draft_payload(data)
     await callback.message.edit_text("Создаю встречу...")
     try:
         result = await api_client.post(
@@ -418,13 +481,102 @@ async def confirm_create(callback: CallbackQuery, state: FSMContext):
             params={"telegram_user_id": callback.from_user.id},
         )
         await callback.message.edit_text(
-            f"Встреча создана!\n<b>{result.get('title')}</b>",
+            f"✅ Встреча создана!\n<b>{result.get('title')}</b>",
             parse_mode="HTML",
         )
     except Exception as e:
         await callback.message.edit_text(f"Ошибка при создании встречи: {e}")
-
     await state.clear()
+    await callback.answer()
+
+
+@router.callback_query(F.data == "confirm:create", CreateEventStates.confirm)
+async def confirm_create(callback: CallbackQuery, state: FSMContext):
+    await _do_create(callback, state)
+
+
+@router.callback_query(F.data == "conflict:proceed", CreateEventStates.conflict)
+async def conflict_proceed(callback: CallbackQuery, state: FSMContext):
+    await _do_create(callback, state)
+
+
+@router.callback_query(F.data == "conflict:slots", CreateEventStates.conflict)
+async def conflict_show_slots(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    start, end, title = _get_start_end_title(data)
+    duration = int((end - start).total_seconds() // 60)
+    tg_uid = data.get("telegram_user_id") or callback.from_user.id
+
+    raw_att = (data.get("draft") or {}).get("attendees") or data.get("attendees") or []
+    attendee_emails = [a["email"] for a in raw_att
+                       if a.get("email") and not a["email"].endswith("@unknown")]
+
+    await callback.message.edit_text("Ищу свободные слоты...")
+    try:
+        slots = await api_client.post(
+            "/api/v1/events/find-slots",
+            json={
+                "date_from": start.replace(hour=0, minute=0, second=0).isoformat(),
+                "date_to": (start + timedelta(days=3)).replace(hour=23, minute=59, second=59).isoformat(),
+                "duration_minutes": duration,
+                "attendee_emails": attendee_emails,
+            },
+            params={"telegram_user_id": tg_uid},
+        )
+    except Exception as e:
+        await callback.message.edit_text(f"Не удалось найти слоты: {e}")
+        await callback.answer()
+        return
+
+    if not slots:
+        await callback.message.edit_text("Свободных слотов не найдено в ближайшие 3 дня.")
+        await callback.answer()
+        return
+
+    builder = InlineKeyboardBuilder()
+    for slot in slots[:6]:
+        s = _parse_dt(slot.get("start"))
+        e = _parse_dt(slot.get("end"))
+        if s and e:
+            label = f"{s.strftime('%d.%m %H:%M')} – {e.strftime('%H:%M')}"
+            builder.button(text=label, callback_data=f"slot:pick:{slot['start']}:{slot['end']}")
+    builder.button(text="Отмена", callback_data="confirm:cancel")
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        f"Свободные слоты для «{title}» ({duration} мин):",
+        reply_markup=builder.as_markup(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("slot:pick:"), CreateEventStates.conflict)
+async def slot_picked(callback: CallbackQuery, state: FSMContext):
+    _, _, start_str, end_str = callback.data.split(":", 3)
+    data = await state.get_data()
+
+    if data.get("draft"):
+        draft = dict(data["draft"])
+        draft["start_at"] = start_str
+        draft["end_at"] = end_str
+        await state.update_data(draft=draft)
+    else:
+        s = datetime.fromisoformat(start_str)
+        await state.update_data(
+            chosen_date=s.strftime("%Y-%m-%d"),
+            chosen_time=s.strftime("%H:%M"),
+            duration=int((datetime.fromisoformat(end_str) - s).total_seconds() // 60),
+        )
+
+    data = await state.get_data()
+    start, end, title = _get_start_end_title(data)
+    confirm_text = _build_confirm_text(title, start, end, data)
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Создать", callback_data="confirm:create")
+    builder.button(text="Отмена", callback_data="confirm:cancel")
+    builder.adjust(2)
+    await state.set_state(CreateEventStates.confirm)
+    await callback.message.edit_text(confirm_text, reply_markup=builder.as_markup(), parse_mode="HTML")
     await callback.answer()
 
 
