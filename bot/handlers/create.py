@@ -66,6 +66,13 @@ async def create_text_mode(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.callback_query(F.data == "create:mode:step", CreateEventStates.choose_mode)
+async def create_step_mode(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(mode="step", telegram_user_id=callback.from_user.id)
+    await _ask_calendar(callback.message, state)
+    await callback.answer()
+
+
 @router.message(CreateEventStates.enter_title, F.text)
 async def handle_text_input(message: Message, state: FSMContext):
     data = await state.get_data()
@@ -155,9 +162,10 @@ async def handle_text_input(message: Message, state: FSMContext):
             await message.answer(f"Ошибка при разборе: {e}")
             await state.clear()
     else:
-        # Step-by-step: title entered
+        # Step-by-step: title entered — go to description
         await state.update_data(title=message.text)
-        await _ask_calendar(message, state)
+        await state.set_state(CreateEventStates.enter_description)
+        await message.answer("Введите описание (или /skip для пропуска):")
 
 
 async def _ask_calendar(message: Message, state: FSMContext, prefix: str = ""):
@@ -192,8 +200,13 @@ async def calendar_selected(callback: CallbackQuery, state: FSMContext):
 
     data = await state.get_data()
     if data.get("draft"):
-        # Text mode: already have draft, go to recurrence or confirm
+        # Text mode: already have draft, go to confirm
         await _show_confirm(callback.message, state)
+    elif data.get("chosen_date"):
+        # Date already set (e.g. coming from find_slot), skip to title
+        await state.set_state(CreateEventStates.enter_title)
+        await state.update_data(mode="step")
+        await callback.message.edit_text("Введите название встречи:")
     else:
         # Step mode: ask date
         today = date.today()
@@ -296,14 +309,6 @@ async def attendees_entered(message: Message, state: FSMContext):
     await state.update_data(mode="step")
     await message.answer("Введите название встречи:")
 
-
-@router.message(CreateEventStates.enter_title, F.text)
-async def title_entered_step(message: Message, state: FSMContext):
-    data = await state.get_data()
-    if data.get("mode") == "step":
-        await state.update_data(title=message.text)
-        await state.set_state(CreateEventStates.enter_description)
-        await message.answer("Введите описание (или /skip для пропуска):")
 
 
 @router.message(CreateEventStates.enter_description)

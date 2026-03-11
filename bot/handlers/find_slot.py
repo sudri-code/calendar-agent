@@ -214,8 +214,9 @@ async def slot_create(callback: CallbackQuery, state: FSMContext):
         chosen_date=start.strftime("%Y-%m-%d"),
         chosen_time=start.strftime("%H:%M"),
         duration=int((end - start).total_seconds() / 60),
-        attendees=data.get("attendees", []),
+        attendees=[{"email": e, "name": None} for e in data.get("attendees", [])],
         draft=None,
+        telegram_user_id=callback.from_user.id,
     )
 
     try:
