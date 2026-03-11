@@ -61,15 +61,17 @@ def _format_event(event: dict) -> str:
 
     try:
         tz = ZoneInfo(bot_settings.ews_timezone)
-        # Нормализуем ISO-строку и считаем, что сервер отдаёт время в UTC
         start = datetime.fromisoformat(start_at.replace("Z", "+00:00"))
         end = datetime.fromisoformat(end_at.replace("Z", "+00:00"))
+        # Если сервер вернул наивное время — считаем его уже локальным
         if start.tzinfo is None:
-            start = start.replace(tzinfo=timezone.utc)
+            start_local = start
+        else:
+            start_local = start.astimezone(tz)
         if end.tzinfo is None:
-            end = end.replace(tzinfo=timezone.utc)
-        start_local = start.astimezone(tz)
-        end_local = end.astimezone(tz)
+            end_local = end
+        else:
+            end_local = end.astimezone(tz)
         time_str = f"{start_local.strftime('%H:%M')} – {end_local.strftime('%H:%M')}"
     except Exception:
         time_str = ""

@@ -16,6 +16,24 @@ from bot.config import bot_settings
 router = Router()
 
 
+DURATION_OPTIONS = [
+    ("15 мин", 15), ("30 мин", 30), ("45 мин", 45),
+    ("1 час", 60), ("1.5 ч", 90), ("2 часа", 120),
+]
+
+
+def _to_local_display(dt: datetime) -> datetime:
+    """
+    Для отображения: если datetime наивный, считаем его уже в локальной
+    тайм-зоне пользователя и не трогаем. Если с tzinfo — переводим в
+    часовой пояс бота.
+    """
+    if dt.tzinfo is None:
+        return dt
+    tz = ZoneInfo(bot_settings.ews_timezone)
+    return dt.astimezone(tz)
+
+
 def _parse_dt(s: str) -> datetime | None:
     if not s:
         return None
@@ -23,13 +41,6 @@ def _parse_dt(s: str) -> datetime | None:
         return datetime.fromisoformat(s)
     except ValueError:
         return None
-
-
-
-DURATION_OPTIONS = [
-    ("15 мин", 15), ("30 мин", 30), ("45 мин", 45),
-    ("1 час", 60), ("1.5 ч", 90), ("2 часа", 120),
-]
 
 
 def build_duration_keyboard():
@@ -144,22 +155,16 @@ async def handle_text_input(message: Message, state: FSMContext):
             start = datetime.fromisoformat(draft["start_at"])
             end = datetime.fromisoformat(draft["end_at"])
 
-            # Приводим время к часовому поясу бота для отображения
-            tz = ZoneInfo(bot_settings.ews_timezone)
-            if start.tzinfo is None:
-                start = start.replace(tzinfo=timezone.utc)
-            if end.tzinfo is None:
-                end = end.replace(tzinfo=timezone.utc)
-            start_local = start.astimezone(tz)
-            end_local = end.astimezone(tz)
-
             att_names = [a.get("name") or a.get("email", "") for a in (draft.get("attendees") or []) if a.get("email") and not a.get("email", "").endswith("@unknown")]
             att_str = f"\n<b>Участники:</b> {', '.join(att_names)}" if att_names else ""
 
+            start_disp = _to_local_display(start)
+            end_disp = _to_local_display(end)
+
             preview = (
                 f"<b>Встреча:</b> {draft.get('title')}\n"
-                f"<b>Начало:</b> {start_local.strftime('%d.%m.%y %H:%M')}\n"
-                f"<b>Конец:</b> {end_local.strftime('%H:%M')}\n"
+                f"<b>Начало:</b> {start_disp.strftime('%d.%m.%y %H:%M')}\n"
+                f"<b>Конец:</b> {end_disp.strftime('%H:%M')}\n"
                 f"{att_str}"
                 f"{rec_str}"
             )
@@ -373,14 +378,9 @@ def _get_start_end_title(data: dict) -> tuple[datetime, datetime, str]:
 
 
 def _build_confirm_text(title: str, start: datetime, end: datetime, data: dict) -> str:
-    # Преобразуем к часовому поясу бота только для отображения
-    tz = ZoneInfo(bot_settings.ews_timezone)
-    if start.tzinfo is None:
-        start = start.replace(tzinfo=timezone.utc)
-    if end.tzinfo is None:
-        end = end.replace(tzinfo=timezone.utc)
-    start_local = start.astimezone(tz)
-    end_local = end.astimezone(tz)
+    # Для отображения: наивные времена считаем локальными, aware конвертируем
+    start_disp = _to_local_display(start)
+    end_disp = _to_local_display(end)
     recurrence = data.get("recurrence")
     rec_str = ""
     if recurrence:
@@ -398,8 +398,8 @@ def _build_confirm_text(title: str, start: datetime, end: datetime, data: dict) 
     return (
         f"<b>Подтвердите создание встречи:</b>\n\n"
         f"<b>Название:</b> {title}\n"
-        f"<b>Начало:</b> {start_local.strftime('%d.%m.%y %H:%M')}\n"
-        f"<b>Конец:</b> {end_local.strftime('%H:%M')}\n"
+        f"<b>Начало:</b> {start_disp.strftime('%d.%m.%y %H:%M')}\n"
+        f"<b>Конец:</b> {end_disp.strftime('%H:%M')}\n"
         f"{att_str}{rec_str}"
     )
 
@@ -408,14 +408,9 @@ def _format_conflict_avail(conflict: dict) -> str:
     s = _parse_dt(conflict.get("start"))
     e = _parse_dt(conflict.get("end"))
     if s and e:
-        tz = ZoneInfo(bot_settings.ews_timezone)
-        if s.tzinfo is None:
-            s = s.replace(tzinfo=timezone.utc)
-        if e.tzinfo is None:
-            e = e.replace(tzinfo=timezone.utc)
-        s_local = s.astimezone(tz)
-        e_local = e.astimezone(tz)
-        time_str = f" ({s_local.strftime('%H:%M')}–{e_local.strftime('%H:%M')})"
+        s_disp = _to_local_display(s)
+        e_disp = _to_local_display(e)
+        time_str = f" ({s_disp.strftime('%H:%M')}–{e_disp.strftime('%H:%M')})"
     else:
         time_str = ""
     email = conflict.get("email", "")
@@ -451,16 +446,9 @@ async def _show_confirm(message, state: FSMContext):
 
     if conflicts:
         conflict_lines = "\n".join(_format_conflict_avail(c) for c in conflicts[:5])
-        # Для отображения переведём время в локальный часовой пояс
-        tz = ZoneInfo(bot_settings.ews_timezone)
-        start_disp = start
-        end_disp = end
-        if start_disp.tzinfo is None:
-            start_disp = start_disp.replace(tzinfo=timezone.utc)
-        if end_disp.tzinfo is None:
-            end_disp = end_disp.replace(tzinfo=timezone.utc)
-        start_disp = start_disp.astimezone(tz)
-        end_disp = end_disp.astimezone(tz)
+        # Для отображения: наивные считаем локальными, aware конвертируем
+        start_disp = _to_local_display(start)
+        end_disp = _to_local_display(end)
         text = (
             f"⚠️ <b>В это время есть занятость:</b>\n\n"
             f"{conflict_lines}\n\n"
@@ -579,14 +567,9 @@ async def conflict_show_slots(callback: CallbackQuery, state: FSMContext):
         s = _parse_dt(slot.get("start_at"))
         e = _parse_dt(slot.get("end_at"))
         if s and e:
-            tz = ZoneInfo(bot_settings.ews_timezone)
-            if s.tzinfo is None:
-                s = s.replace(tzinfo=timezone.utc)
-            if e.tzinfo is None:
-                e = e.replace(tzinfo=timezone.utc)
-            s_local = s.astimezone(tz)
-            e_local = e.astimezone(tz)
-            label = f"{s_local.strftime('%d.%m %H:%M')} – {e_local.strftime('%H:%M')}"
+            s_disp = _to_local_display(s)
+            e_disp = _to_local_display(e)
+            label = f"{s_disp.strftime('%d.%m %H:%M')} – {e_disp.strftime('%H:%M')}"
             builder.button(text=label, callback_data=f"slot:pick:{idx}")
     builder.button(text="Отмена", callback_data="confirm:cancel")
     builder.adjust(1)

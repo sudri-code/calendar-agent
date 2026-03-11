@@ -145,9 +145,11 @@ async def slot_duration_picked(callback: CallbackQuery, state: FSMContext):
     for i, slot in enumerate(slots[:8]):
         try:
             start = datetime.fromisoformat(slot["start_at"].replace("Z", "+00:00"))
+            # если слоты приходят без tzinfo, считаем их уже локальными
             if start.tzinfo is None:
-                start = start.replace(tzinfo=timezone.utc)
-            start_local = start.astimezone(tz)
+                start_local = start
+            else:
+                start_local = start.astimezone(tz)
             label = start_local.strftime("%d.%m %H:%M")
         except Exception:
             label = f"Слот {i + 1}"
@@ -181,11 +183,13 @@ async def slot_picked(callback: CallbackQuery, state: FSMContext):
         start = datetime.fromisoformat(chosen_slot["start_at"].replace("Z", "+00:00"))
         end = datetime.fromisoformat(chosen_slot["end_at"].replace("Z", "+00:00"))
         if start.tzinfo is None:
-            start = start.replace(tzinfo=timezone.utc)
+            start_local = start
+        else:
+            start_local = start.astimezone(tz)
         if end.tzinfo is None:
-            end = end.replace(tzinfo=timezone.utc)
-        start_local = start.astimezone(tz)
-        end_local = end.astimezone(tz)
+            end_local = end
+        else:
+            end_local = end.astimezone(tz)
     except Exception:
         await callback.message.edit_text("Ошибка при выборе слота.")
         await state.clear()
