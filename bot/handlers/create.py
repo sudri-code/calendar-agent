@@ -22,28 +22,6 @@ def _parse_dt(s: str) -> datetime | None:
         return None
 
 
-def _overlaps(s1: datetime, e1: datetime, s2: datetime, e2: datetime) -> bool:
-    """True if [s1,e1) and [s2,e2) overlap."""
-    s1 = s1.replace(tzinfo=None) if s1.tzinfo else s1
-    e1 = e1.replace(tzinfo=None) if e1.tzinfo else e1
-    s2 = s2.replace(tzinfo=None) if s2.tzinfo else s2
-    e2 = e2.replace(tzinfo=None) if e2.tzinfo else e2
-    return s1 < e2 and s2 < e1
-
-
-def _format_conflict(event: dict) -> str:
-    s = _parse_dt(event.get("start_at", ""))
-    e = _parse_dt(event.get("end_at", ""))
-    time_str = ""
-    if s and e:
-        time_str = f" ({s.strftime('%H:%M')}–{e.strftime('%H:%M')})"
-    title = event.get("title", "Без названия")
-    attendees = event.get("attendees_json") or []
-    att_str = ""
-    if 0 < len(attendees) < 5:
-        names = [a.get("name") or a.get("email", "") for a in attendees]
-        att_str = f"\n   👥 {', '.join(names)}"
-    return f"📅 {title}{time_str}{att_str}"
 
 DURATION_OPTIONS = [
     ("15 мин", 15), ("30 мин", 30), ("45 мин", 45),
@@ -401,30 +379,45 @@ def _build_confirm_text(title: str, start: datetime, end: datetime, data: dict) 
     )
 
 
+def _format_conflict_avail(conflict: dict) -> str:
+    s = _parse_dt(conflict.get("start"))
+    e = _parse_dt(conflict.get("end"))
+    time_str = f" ({s.strftime('%H:%M')}–{e.strftime('%H:%M')})" if s and e else ""
+    email = conflict.get("email", "")
+    return f"👤 {email}{time_str}"
+
+
 async def _show_confirm(message, state: FSMContext):
     data = await state.get_data()
     start, end, title = _get_start_end_title(data)
     tg_uid = data.get("telegram_user_id") or message.chat.id
 
-    # Check availability
+    raw_att = (data.get("draft") or {}).get("attendees") or data.get("attendees") or []
+    attendee_emails = [
+        a["email"] for a in raw_att
+        if a.get("email") and not a["email"].endswith("@unknown")
+    ]
+
+    # Check availability via EWS (user + attendees)
     conflicts = []
     try:
-        day_events = await api_client.get(
-            "/api/v1/events/day",
-            params={"telegram_user_id": tg_uid, "date": start.strftime("%Y-%m-%d")},
+        avail = await api_client.post(
+            "/api/v1/events/check-availability",
+            json={
+                "start_at": start.isoformat(),
+                "end_at": end.isoformat(),
+                "attendee_emails": attendee_emails,
+            },
+            params={"telegram_user_id": tg_uid},
         )
-        for ev in day_events:
-            es = _parse_dt(ev.get("start_at", ""))
-            ee = _parse_dt(ev.get("end_at", ""))
-            if es and ee and _overlaps(start, end, es, ee):
-                conflicts.append(ev)
+        conflicts = avail.get("conflicts", [])
     except Exception:
         pass
 
     if conflicts:
-        conflict_lines = "\n".join(_format_conflict(c) for c in conflicts[:5])
+        conflict_lines = "\n".join(_format_conflict_avail(c) for c in conflicts[:5])
         text = (
-            f"⚠️ <b>В это время уже есть события:</b>\n\n"
+            f"⚠️ <b>В это время есть занятость:</b>\n\n"
             f"{conflict_lines}\n\n"
             f"<b>Планируемая встреча:</b> {title}\n"
             f"{start.strftime('%d.%m.%y %H:%M')} – {end.strftime('%H:%M')}"
