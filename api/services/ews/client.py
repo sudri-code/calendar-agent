@@ -125,6 +125,20 @@ class EWSClient:
             results = []
             try:
                 from exchangelib.services import ResolveNames
+
+                # exchangelib ResolveNames is a low-level service that requires
+                # protocol.version to already be initialized (unlike high-level ORM calls
+                # that detect the version automatically). Trigger version detection by
+                # making a minimal ORM request first.
+                if getattr(acc.protocol, 'version', None) is None:
+                    try:
+                        next(iter(acc.contacts.all()), None)
+                    except Exception:
+                        try:
+                            next(iter(acc.calendar.all()), None)
+                        except Exception:
+                            pass
+
                 resolved = ResolveNames(protocol=acc.protocol).call(
                     unresolved_entries=[query],
                     return_full_contact_data=True,
