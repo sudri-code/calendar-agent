@@ -1,7 +1,11 @@
 from datetime import datetime
 
+import structlog
+
 from api.services.ews.client import run_ews
 from api.services.ews.client import _build_account
+
+logger = structlog.get_logger()
 
 
 async def get_schedule(account, emails: list[str], start: datetime, end: datetime, timezone: str = "UTC") -> dict:
@@ -38,19 +42,23 @@ async def get_schedule(account, emails: list[str], start: datetime, end: datetim
             schedules = []
             for email, free_busy in zip(all_emails, result):
                 busy_items = []
-                if hasattr(free_busy, "calendar_event_array") and free_busy.calendar_event_array:
-                    for ev in free_busy.calendar_event_array:
-                        busy_items.append({
-                            "start": {"dateTime": str(ev.start)},
-                            "end": {"dateTime": str(ev.end)},
-                            "status": "busy",
-                        })
+                cal_events = getattr(free_busy, "calendar_events", None) or []
+                for ev in cal_events:
+                    busy_type = (getattr(ev, "busy_type", None) or "Busy").lower()
+                    if busy_type == "free":
+                        continue
+                    busy_items.append({
+                        "start": {"dateTime": ev.start.isoformat()},
+                        "end": {"dateTime": ev.end.isoformat()},
+                        "status": busy_type,
+                    })
                 schedules.append({
                     "scheduleId": email,
                     "scheduleItems": busy_items,
                 })
             return {"value": schedules}
-        except Exception:
+        except Exception as e:
+            logger.error("get_free_busy_info failed", error=str(e), emails=all_emails)
             return {"value": []}
 
     return await run_ews(_fetch)
