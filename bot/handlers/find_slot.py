@@ -213,7 +213,6 @@ async def slot_picked(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "slot:create", SlotStates.confirm_create)
 async def slot_create(callback: CallbackQuery, state: FSMContext):
     # Transition to create flow with prefilled data
-    from bot.states.create_states import CreateEventStates
     data = await state.get_data()
     chosen_slot = data.get("chosen_slot", {})
 
@@ -225,7 +224,6 @@ async def slot_create(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
-    await state.set_state(CreateEventStates.choose_calendar)
     await state.update_data(
         mode="step",
         chosen_date=start.strftime("%Y-%m-%d"),
@@ -235,32 +233,9 @@ async def slot_create(callback: CallbackQuery, state: FSMContext):
         draft=None,
         telegram_user_id=callback.from_user.id,
     )
-
-    try:
-        calendars = await api_client.get(
-            "/api/v1/calendars",
-            params={"telegram_user_id": callback.from_user.id},
-        )
-        active_cals = [c for c in calendars if c.get("is_active")]
-    except Exception:
-        active_cals = []
-
-    if not active_cals:
-        await callback.message.edit_text("Нет активных календарей.")
-        await state.clear()
-        await callback.answer()
-        return
-
-    builder = InlineKeyboardBuilder()
-    for cal in active_cals[:10]:
-        builder.button(text=cal["name"], callback_data=f"cal_select:{cal['id']}")
-    builder.adjust(1)
-
-    await callback.message.edit_text(
-        "Выберите основной календарь:",
-        reply_markup=builder.as_markup(),
-    )
     await callback.answer()
+    from bot.handlers.create import _ask_calendar
+    await _ask_calendar(callback.message, state)
 
 
 @router.callback_query(F.data == "slot:cancel")

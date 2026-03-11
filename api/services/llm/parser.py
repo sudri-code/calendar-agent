@@ -80,10 +80,6 @@ async def _save_turn(session_id: uuid.UUID, role: str, content: str) -> None:
 
 def _parse_llm_response(raw: dict) -> Optional[EventDraft]:
     """Parse LLM JSON response into EventDraft."""
-    intent = raw.get("intent", "unknown")
-    if intent not in ("create_event", "reschedule_event"):
-        return None
-
     # Parse date and time
     date_range = raw.get("date_range")
     start_time = raw.get("start_time")

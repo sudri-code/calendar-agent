@@ -89,13 +89,107 @@ async def create_step_mode(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+async def _process_llm_draft(
+    message: Message,
+    state: FSMContext,
+    text: str,
+    result: dict | None = None,
+) -> None:
+    """Resolves attendees, shows preview, and routes to calendar selection.
+    If result is None, calls the parse API first.
+    Exported for use by text_input.py.
+    """
+    await state.update_data(telegram_user_id=message.from_user.id)
+    if result is None:
+        await message.answer("Разбираю ваш запрос...")
+        try:
+            result = await api_client.post(
+                "/api/v1/events/draft/parse",
+                params={"text": text, "telegram_user_id": message.from_user.id},
+            )
+        except Exception as e:
+            await message.answer(f"Ошибка при разборе: {e}")
+            await state.clear()
+            return
+
+    draft = result.get("draft")
+    missing = result.get("missing_fields", [])
+
+    if not draft:
+        await message.answer(
+            "Не смог разобрать запрос. Попробуйте переформулировать или создайте пошагово."
+        )
+        await state.clear()
+        return
+
+    # Resolve attendees without real emails against contact book
+    attendees = draft.get("attendees") or []
+    resolved = []
+    for att in attendees:
+        if att.get("email", "").endswith("@unknown"):
+            try:
+                name = att.get("name", "")
+                contacts = []
+                # Try full name, then progressively strip endings (Russian declension)
+                for trim in range(0, min(4, max(0, len(name) - 3))):
+                    q = name[:len(name) - trim] if trim > 0 else name
+                    contacts = await api_client.get(
+                        "/api/v1/contacts/search",
+                        params={"telegram_user_id": message.from_user.id, "q": q},
+                    )
+                    if contacts:
+                        break
+                if contacts:
+                    resolved.append({"email": contacts[0].get("email", att["email"]), "name": contacts[0].get("name", att.get("name"))})
+                else:
+                    resolved.append(att)
+            except Exception:
+                resolved.append(att)
+        else:
+            resolved.append(att)
+    draft["attendees"] = resolved
+
+    await state.update_data(draft=draft, llm_result=result)
+
+    # Show preview
+    rec = draft.get("recurrence")
+    rec_str = ""
+    if rec:
+        freq_labels = {
+            "daily": "ежедневно", "weekly": "еженедельно",
+            "monthly": "ежемесячно", "yearly": "ежегодно",
+        }
+        rec_str = f"\n🔁 Повторяется {freq_labels.get(rec['frequency'], rec['frequency'])}"
+
+    start = datetime.fromisoformat(draft["start_at"])
+    end = datetime.fromisoformat(draft["end_at"])
+
+    att_names = [a.get("name") or a.get("email", "") for a in (draft.get("attendees") or []) if a.get("email") and not a.get("email", "").endswith("@unknown")]
+    att_str = f"\n<b>Участники:</b> {', '.join(att_names)}" if att_names else ""
+
+    start_disp = _to_local_display(start)
+    end_disp = _to_local_display(end)
+
+    preview = (
+        f"<b>Встреча:</b> {draft.get('title')}\n"
+        f"<b>Начало:</b> {start_disp.strftime('%d.%m.%y %H:%M')}\n"
+        f"<b>Конец:</b> {end_disp.strftime('%H:%M')}\n"
+        f"{att_str}"
+        f"{rec_str}"
+    )
+
+    if missing:
+        preview += f"\n\n<i>Уточните: {', '.join(missing)}</i>"
+
+    await _ask_calendar(message, state, preview)
+
+
 @router.message(CreateEventStates.enter_title, F.text)
 async def handle_text_input(message: Message, state: FSMContext):
     data = await state.get_data()
     mode = data.get("mode", "step")
 
     if mode == "text":
-        # Parse via LLM
         await message.answer("Разбираю ваш запрос...")
         try:
             result = await api_client.post(
@@ -105,81 +199,11 @@ async def handle_text_input(message: Message, state: FSMContext):
                     "telegram_user_id": message.from_user.id,
                 },
             )
-            draft = result.get("draft")
-            missing = result.get("missing_fields", [])
-
-            if not draft:
-                await message.answer(
-                    "Не смог разобрать запрос. Попробуйте переформулировать или создайте пошагово."
-                )
-                await state.clear()
-                return
-
-            # Resolve attendees without real emails against contact book
-            attendees = draft.get("attendees") or []
-            resolved = []
-            for att in attendees:
-                if att.get("email", "").endswith("@unknown"):
-                    try:
-                        name = att.get("name", "")
-                        contacts = []
-                        # Try full name, then progressively strip endings (Russian declension)
-                        for trim in range(0, min(4, max(0, len(name) - 3))):
-                            q = name[:len(name) - trim] if trim > 0 else name
-                            contacts = await api_client.get(
-                                "/api/v1/contacts/search",
-                                params={"telegram_user_id": message.from_user.id, "q": q},
-                            )
-                            if contacts:
-                                break
-                        if contacts:
-                            resolved.append({"email": contacts[0].get("email", att["email"]), "name": contacts[0].get("name", att.get("name"))})
-                        else:
-                            resolved.append(att)
-                    except Exception:
-                        resolved.append(att)
-                else:
-                    resolved.append(att)
-            draft["attendees"] = resolved
-
-            await state.update_data(draft=draft, llm_result=result)
-
-            # Show preview
-            rec = draft.get("recurrence")
-            rec_str = ""
-            if rec:
-                freq_labels = {
-                    "daily": "ежедневно", "weekly": "еженедельно",
-                    "monthly": "ежемесячно", "yearly": "ежегодно",
-                }
-                rec_str = f"\n🔁 Повторяется {freq_labels.get(rec['frequency'], rec['frequency'])}"
-
-            start = datetime.fromisoformat(draft["start_at"])
-            end = datetime.fromisoformat(draft["end_at"])
-
-            att_names = [a.get("name") or a.get("email", "") for a in (draft.get("attendees") or []) if a.get("email") and not a.get("email", "").endswith("@unknown")]
-            att_str = f"\n<b>Участники:</b> {', '.join(att_names)}" if att_names else ""
-
-            start_disp = _to_local_display(start)
-            end_disp = _to_local_display(end)
-
-            preview = (
-                f"<b>Встреча:</b> {draft.get('title')}\n"
-                f"<b>Начало:</b> {start_disp.strftime('%d.%m.%y %H:%M')}\n"
-                f"<b>Конец:</b> {end_disp.strftime('%H:%M')}\n"
-                f"{att_str}"
-                f"{rec_str}"
-            )
-
-            if missing:
-                preview += f"\n\n<i>Уточните: {', '.join(missing)}</i>"
-
-            # Need calendar selection
-            await _ask_calendar(message, state, preview)
-
         except Exception as e:
             await message.answer(f"Ошибка при разборе: {e}")
             await state.clear()
+            return
+        await _process_llm_draft(message, state, message.text, result=result)
     else:
         # Step-by-step: title entered — go to description
         await state.update_data(title=message.text)
