@@ -118,6 +118,42 @@ class EWSClient:
 
         return await run_ews(_fetch)
 
+    async def resolve_names(self, query: str) -> list[dict]:
+        """Search the Global Address List and personal contacts via EWS ResolveNames."""
+        def _fetch():
+            acc = self._get_account()
+            results = []
+            try:
+                from exchangelib.services import ResolveNames
+                resolved = ResolveNames(protocol=acc.protocol).call(
+                    unresolved_entries=[query],
+                    return_full_contact_data=True,
+                    search_scope="ActiveDirectoryContacts",
+                )
+                for item in resolved:
+                    # ResolveNames returns (Mailbox, Contact) tuples or just Mailbox
+                    if isinstance(item, tuple):
+                        mailbox, contact = item
+                    else:
+                        mailbox, contact = item, None
+
+                    name = getattr(mailbox, "name", "") or ""
+                    email = getattr(mailbox, "email_address", "") or ""
+
+                    if contact is not None:
+                        if not name:
+                            name = getattr(contact, "display_name", "") or ""
+                        if not email and hasattr(contact, "email_addresses") and contact.email_addresses:
+                            email = contact.email_addresses[0].email or ""
+
+                    if email:
+                        results.append({"name": name, "email": email})
+            except Exception as e:
+                logger.warning("ResolveNames failed", query=query, error=str(e))
+            return results
+
+        return await run_ews(_fetch)
+
     async def get_events(self, folder_id: str, start, end, timezone_str: str = "UTC") -> list[dict]:
         def _fetch():
             from zoneinfo import ZoneInfo

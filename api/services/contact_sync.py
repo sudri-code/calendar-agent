@@ -99,8 +99,11 @@ async def sync_contacts(user_id: uuid.UUID) -> int:
         return total
 
 
-async def search_contacts(user_id: uuid.UUID, q: str) -> list[Contact]:
-    """Search contacts by name or email (case-insensitive)."""
+async def search_contacts(user_id: uuid.UUID, q: str) -> list[dict]:
+    """Search contacts: local DB first, then live GAL search via EWS ResolveNames."""
+    from api.services.ews.contacts import resolve_names as ews_resolve_names
+
+    # 1. Search local DB
     async with async_session_factory() as session:
         result = await session.execute(
             select(Contact).where(
@@ -112,4 +115,34 @@ async def search_contacts(user_id: uuid.UUID, q: str) -> list[Contact]:
                 ),
             ).limit(20)
         )
-        return result.scalars().all()
+        db_contacts = result.scalars().all()
+
+        db_results = [
+            {"name": c.name, "email": c.email or ""}
+            for c in db_contacts
+        ]
+
+        # 2. Live GAL search via EWS ResolveNames for all active accounts
+        seen_emails = {r["email"].lower() for r in db_results if r["email"]}
+
+        accounts_result = await session.execute(
+            select(ExchangeAccount).where(
+                ExchangeAccount.user_id == user_id,
+                ExchangeAccount.status == "active",
+            )
+        )
+        accounts = accounts_result.scalars().all()
+
+    gal_results = []
+    for account in accounts:
+        try:
+            resolved = await ews_resolve_names(account, q)
+            for r in resolved:
+                email_lower = (r.get("email") or "").lower()
+                if email_lower and email_lower not in seen_emails:
+                    seen_emails.add(email_lower)
+                    gal_results.append(r)
+        except Exception as e:
+            logger.warning("GAL search failed", account=account.email, error=str(e))
+
+    return db_results + gal_results

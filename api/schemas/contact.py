@@ -12,3 +12,9 @@ class ContactResponse(BaseModel):
     merged_contact_key: Optional[str]
 
     model_config = {"from_attributes": True}
+
+
+class ContactSearchResult(BaseModel):
+    """Unified result for contact search (local DB + GAL)."""
+    name: str
+    email: Optional[str] = None

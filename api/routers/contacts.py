@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.db.session import get_async_session
 from api.routers.accounts import get_or_create_user
-from api.schemas.contact import ContactResponse
+from api.schemas.contact import ContactResponse, ContactSearchResult
 from api.services.contact_sync import search_contacts, sync_contacts
 
 router = APIRouter(prefix="/api/v1/contacts", tags=["contacts"])
@@ -24,7 +24,7 @@ async def list_contacts_endpoint(
     return result.scalars().all()
 
 
-@router.get("/search", response_model=list[ContactResponse])
+@router.get("/search", response_model=list[ContactSearchResult])
 async def search_contacts_endpoint(
     telegram_user_id: int = Query(...),
     q: str = Query(...),
