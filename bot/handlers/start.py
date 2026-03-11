@@ -1,5 +1,7 @@
 from aiogram import Router, F
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandStart, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import any_state
 from aiogram.types import Message
 
 from bot.keyboards.main_menu import get_main_menu
@@ -31,6 +33,16 @@ async def cmd_start(message: Message):
         "/settings — настройки",
         reply_markup=get_main_menu(),
     )
+
+
+@router.message(Command("cancel"), StateFilter(any_state))
+async def cmd_cancel(message: Message, state: FSMContext):
+    current = await state.get_state()
+    await state.clear()
+    if current:
+        await message.answer("Действие отменено.", reply_markup=get_main_menu())
+    else:
+        await message.answer("Нет активного действия.", reply_markup=get_main_menu())
 
 
 @router.message(Command("help"))

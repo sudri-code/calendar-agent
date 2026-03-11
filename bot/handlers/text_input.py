@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 from aiogram import Router, F
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import default_state
+from aiogram.fsm.state import default_state, any_state
 from aiogram.types import Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -219,3 +219,45 @@ async def _handle_show_week(message: Message, result: dict):
         for ev in evs:
             lines.append(_format_event(ev))
     await message.answer("\n\n".join(lines), parse_mode="HTML")
+
+
+@router.message(
+    StateFilter(any_state),
+    F.text,
+    ~F.text.in_(KNOWN_BUTTON_TEXTS),
+    ~F.text.startswith("/"),
+)
+async def handle_stuck_state(message: Message, state: FSMContext):
+    """Catch free text when user is in a non-default FSM state (e.g. waiting for keyboard input)."""
+    await state.clear()
+    await message.answer("Разбираю ваш запрос...")
+    try:
+        result = await api_client.post(
+            "/api/v1/events/draft/parse",
+            params={"text": message.text, "telegram_user_id": message.from_user.id},
+        )
+    except Exception as e:
+        await message.answer(f"Ошибка при разборе: {e}")
+        return
+
+    intent = result.get("intent", "unknown")
+
+    if intent == "create_event":
+        await state.update_data(telegram_user_id=message.from_user.id, mode="text")
+        await _process_llm_draft(message, state, message.text, result=result)
+    elif intent == "reschedule_event":
+        from bot.handlers.reschedule import cmd_reschedule
+        await cmd_reschedule(message, state)
+    elif intent == "delete_event":
+        from bot.handlers.delete import cmd_delete
+        await cmd_delete(message, state)
+    elif intent == "find_slot":
+        await _handle_find_slot(message, state, result)
+    elif intent == "show_day":
+        await _handle_show_day(message, result)
+    elif intent == "show_week":
+        await _handle_show_week(message, result)
+    else:
+        await message.answer(
+            "Не понял запрос. Попробуйте переформулировать или нажмите /cancel для сброса."
+        )

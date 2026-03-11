@@ -37,6 +37,14 @@ async def main():
             update=str(event.update),
             exc_info=event.exception,
         )
+        try:
+            msg = event.update.message or (
+                event.update.callback_query.message if event.update.callback_query else None
+            )
+            if msg:
+                await msg.answer("Произошла ошибка. Попробуйте ещё раз или введите /cancel для сброса.")
+        except Exception:
+            pass
 
     # Register routers
     dp.include_router(start.router)
