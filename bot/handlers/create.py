@@ -533,11 +533,11 @@ async def conflict_show_slots(callback: CallbackQuery, state: FSMContext):
 
     builder = InlineKeyboardBuilder()
     for slot in slots[:6]:
-        s = _parse_dt(slot.get("start"))
-        e = _parse_dt(slot.get("end"))
+        s = _parse_dt(slot.get("start_at"))
+        e = _parse_dt(slot.get("end_at"))
         if s and e:
             label = f"{s.strftime('%d.%m %H:%M')} – {e.strftime('%H:%M')}"
-            builder.button(text=label, callback_data=f"slot:pick:{slot['start']}:{slot['end']}")
+            builder.button(text=label, callback_data=f"slot:pick:{slot['start_at']}:{slot['end_at']}")
     builder.button(text="Отмена", callback_data="confirm:cancel")
     builder.adjust(1)
 
