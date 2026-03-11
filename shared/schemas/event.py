@@ -21,7 +21,7 @@ class EventDraft(BaseModel):
     title: str
     start_at: datetime
     end_at: datetime
-    timezone: str = "UTC"
+    timezone: str = "Europe/Moscow"
     description: Optional[str] = None
     attendees: list[AttendeeInfo] = Field(default_factory=list)
     calendar_id: Optional[str] = None

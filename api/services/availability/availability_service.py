@@ -1,10 +1,12 @@
 import uuid
 from datetime import datetime
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.config import settings
 from api.db.session import async_session_factory
 from api.models.calendar import Calendar
 from api.models.exchange_account import ExchangeAccount
@@ -20,6 +22,13 @@ def _parse_dt(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _to_local_naive(dt: datetime) -> datetime:
+    """Convert any datetime to local (MSK) naive for comparison."""
+    if dt.tzinfo is None:
+        return dt  # already assumed local (Moscow)
+    return dt.astimezone(ZoneInfo(settings.ews_timezone)).replace(tzinfo=None)
+
+
 def _overlaps(
     s1: datetime,
     e1: datetime,
@@ -32,10 +41,8 @@ def _overlaps(
     Adjacent intervals where one ends exactly when the other starts
     (e.g. 12:30–15:00 and 15:00–16:00) are treated as NON-overlapping.
     """
-    s1 = s1.replace(tzinfo=None)
-    e1 = e1.replace(tzinfo=None)
-    s2 = s2.replace(tzinfo=None)
-    e2 = e2.replace(tzinfo=None)
+    s1, e1 = _to_local_naive(s1), _to_local_naive(e1)
+    s2, e2 = _to_local_naive(s2), _to_local_naive(e2)
     return s1 < e2 and s2 < e1
 
 

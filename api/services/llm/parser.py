@@ -125,7 +125,7 @@ def _parse_llm_response(raw: dict) -> Optional[EventDraft]:
         title=raw.get("title") or "Встреча",
         start_at=start_at,
         end_at=end_at,
-        timezone="UTC",
+        timezone=settings.ews_timezone,
         description=raw.get("description"),
         attendees=attendees,
         recurrence=recurrence,

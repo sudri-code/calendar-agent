@@ -1,9 +1,11 @@
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
+from api.config import settings
 from api.db.session import async_session_factory
 from api.models.calendar import Calendar
 from api.models.exchange_account import ExchangeAccount
@@ -15,12 +17,18 @@ WORK_HOUR_END = 18    # 18:00
 SLOT_INTERVAL = 30    # minutes
 MAX_SLOTS = 8
 
+_LOCAL_TZ = ZoneInfo(settings.ews_timezone)
+
+
+def _to_local_naive(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(_LOCAL_TZ).replace(tzinfo=None)
+
 
 def _overlaps(s1: datetime, e1: datetime, s2: datetime, e2: datetime) -> bool:
-    s1 = s1.replace(tzinfo=None)
-    e1 = e1.replace(tzinfo=None)
-    s2 = s2.replace(tzinfo=None)
-    e2 = e2.replace(tzinfo=None)
+    s1, e1 = _to_local_naive(s1), _to_local_naive(e1)
+    s2, e2 = _to_local_naive(s2), _to_local_naive(e2)
     return s1 < e2 and s2 < e1
 
 
@@ -77,11 +85,11 @@ async def find_slots(
             try:
                 s = datetime.fromisoformat(item["start"]["dateTime"])
                 e = datetime.fromisoformat(item["end"]["dateTime"])
-                busy_intervals.append((s.replace(tzinfo=None), e.replace(tzinfo=None)))
+                busy_intervals.append((_to_local_naive(s), _to_local_naive(e)))
             except Exception:
                 pass
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(_LOCAL_TZ).replace(tzinfo=None)
     available_slots = []
     current = date_from.replace(hour=WORK_HOUR_START, minute=0, second=0, microsecond=0)
     if current < now:
