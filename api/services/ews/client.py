@@ -230,10 +230,9 @@ class EWSClient:
         def _fetch():
             from exchangelib import CalendarItem, EWSDateTime
             from exchangelib.items import SEND_TO_ALL_AND_SAVE_COPY
-            from exchangelib.restriction import Restriction
 
             acc = self._get_account()
-            items = list(acc.calendar.filter(id=item_id))
+            items = list(acc.fetch(ids=[(item_id, None)]))
             if not items:
                 raise ValueError(f"Event {item_id} not found")
 
@@ -257,17 +256,16 @@ class EWSClient:
             from exchangelib.items import SEND_TO_ALL_AND_SAVE_COPY
 
             acc = self._get_account()
-            # Search default calendar and all sub-folders
-            folders = [acc.calendar] + list(acc.calendar.children)
-            for folder in folders:
-                try:
-                    items = list(folder.filter(id=item_id))
-                    if items:
-                        items[0].delete(send_meeting_cancellations=SEND_TO_ALL_AND_SAVE_COPY)
-                        return
-                except Exception:
-                    continue
-            raise ValueError(f"Event {item_id[:30]}... not found in any calendar folder")
+            # Use GetItem (acc.fetch) — the correct EWS operation to retrieve by ItemId.
+            # FindItem (folder.filter) does NOT support ItemId restrictions and always
+            # returns an empty result set.
+            try:
+                items = list(acc.fetch(ids=[(item_id, None)]))
+            except Exception as e:
+                raise ValueError(f"GetItem failed for {item_id[:30]}...: {e}")
+            if not items:
+                raise ValueError(f"Event {item_id[:30]}... not found via GetItem")
+            items[0].delete(send_meeting_cancellations=SEND_TO_ALL_AND_SAVE_COPY)
 
         return await run_ews(_fetch)
 
