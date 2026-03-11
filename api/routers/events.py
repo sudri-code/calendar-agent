@@ -19,10 +19,13 @@ from api.schemas.event import (
     AvailabilityRequest, CreateEventRequest, EventResponse,
     FindSlotsRequest, UpdateEventRequest,
 )
+from api.models.event import Event
+from api.models.exchange_account import ExchangeAccount
 from api.services.availability.availability_service import check_slot
 from api.services.availability.slot_finder import find_slots
 from api.services.events.event_service import create_event, delete_event, update_event
 from api.services.ews.events import list_events
+from api.services.ews.events import delete_event as ews_delete_event
 
 logger = structlog.get_logger()
 
@@ -174,6 +177,50 @@ async def delete_event_endpoint(
         raise HTTPException(status_code=404, detail="Event not found")
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/delete-by-exchange-ids")
+async def delete_by_exchange_ids(
+    exchange_ids: list[str],
+    telegram_user_id: int = Query(...),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Delete events by Exchange item IDs. Tries DB lookup first, falls back to direct EWS deletion."""
+    user = await get_or_create_user(telegram_user_id, session)
+
+    # Get first active account for direct EWS fallback
+    acc_result = await session.execute(
+        select(ExchangeAccount).join(Calendar, Calendar.account_id == ExchangeAccount.id)
+        .where(Calendar.user_id == user.id, Calendar.is_active == True)
+        .limit(1)
+    )
+    fallback_account = acc_result.scalar_one_or_none()
+
+    deleted = 0
+    errors = []
+    for eid in exchange_ids:
+        try:
+            # Try to find in DB by external_event_id
+            ev_result = await session.execute(
+                select(Event).where(
+                    Event.external_event_id == eid,
+                    Event.user_id == user.id,
+                )
+            )
+            event = ev_result.scalar_one_or_none()
+
+            if event:
+                await delete_event(user.id, event.id, "single", session)
+            elif fallback_account:
+                await ews_delete_event(fallback_account, "", eid)
+            else:
+                errors.append(f"{eid[:20]}...: no account")
+                continue
+            deleted += 1
+        except Exception as e:
+            errors.append(f"{eid[:20]}...: {e}")
+
+    return {"deleted": deleted, "errors": errors}
 
 
 @router.post("/find-slots")

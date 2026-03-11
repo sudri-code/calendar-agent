@@ -215,26 +215,26 @@ async def freeslot_confirm(callback: CallbackQuery, state: FSMContext):
     await state.clear()
 
     await callback.message.edit_text("Удаляю встречи...")
-    errors = []
-    for event_id in event_ids:
-        try:
-            await api_client.delete(
-                f"/api/v1/events/{event_id}",
-                params={
-                    "telegram_user_id": callback.from_user.id,
-                    "recurrence_delete_mode": "single",
-                },
-            )
-        except Exception as e:
-            errors.append(str(e))
+    try:
+        result = await api_client.post(
+            "/api/v1/events/delete-by-exchange-ids",
+            json=event_ids,
+            params={"telegram_user_id": callback.from_user.id},
+        )
+        deleted = result.get("deleted", 0)
+        errors = result.get("errors", [])
+    except Exception as e:
+        await callback.message.edit_text(f"Ошибка при удалении: {e}")
+        await callback.answer()
+        return
 
     if errors:
         await callback.message.edit_text(
-            f"Удалено {len(event_ids) - len(errors)} из {len(event_ids)}. Ошибки: {'; '.join(errors)}"
+            f"Удалено {deleted} из {len(event_ids)}.\nОшибки: {'; '.join(errors)}"
         )
     else:
         await callback.message.edit_text(
-            f"✅ Слот освобождён, удалено встреч: {len(event_ids)}"
+            f"✅ Слот освобождён, удалено встреч: {deleted}"
         )
     await callback.answer()
 
