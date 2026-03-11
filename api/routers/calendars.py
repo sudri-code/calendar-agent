@@ -21,10 +21,11 @@ async def list_calendars_endpoint(
     session: AsyncSession = Depends(get_async_session),
 ):
     user = await get_or_create_user(telegram_user_id, session)
+    excluded_names = {"дни рождения", "birthdays", "birthday"}
     result = await session.execute(
         select(Calendar).where(Calendar.user_id == user.id)
     )
-    return result.scalars().all()
+    return [c for c in result.scalars().all() if c.name.strip().lower() not in excluded_names]
 
 
 @router.patch("/{calendar_id}", response_model=CalendarResponse)

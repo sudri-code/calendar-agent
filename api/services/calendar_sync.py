@@ -26,11 +26,15 @@ async def sync_calendars(user_id: uuid.UUID) -> list[Calendar]:
         )
         accounts = result.scalars().all()
 
+        EXCLUDED_CALENDAR_NAMES = {"дни рождения", "birthdays", "birthday"}
+
         synced = []
         for account in accounts:
             try:
                 graph_calendars = await list_calendars(account)
                 for gc in graph_calendars:
+                    if gc.get("name", "").strip().lower() in EXCLUDED_CALENDAR_NAMES:
+                        continue
                     cal_result = await session.execute(
                         select(Calendar).where(
                             Calendar.account_id == account.id,
