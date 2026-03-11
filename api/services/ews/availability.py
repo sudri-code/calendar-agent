@@ -1,19 +1,34 @@
 from datetime import datetime
 
 import structlog
+from zoneinfo import ZoneInfo
 
+from api.config import settings
 from api.services.ews.client import run_ews
 from api.services.ews.client import _build_account
 
 logger = structlog.get_logger()
 
 
-async def get_schedule(account, emails: list[str], start: datetime, end: datetime, timezone: str = "UTC") -> dict:
-    """Get free/busy schedule via EWS GetUserAvailability."""
+async def get_schedule(account, emails: list[str], start: datetime, end: datetime, timezone: str | None = None) -> dict:
+    """Get free/busy schedule via EWS GetUserAvailability.
+
+    Важный момент: если start/end приходят без tzinfo, мы считаем их уже
+    в локальной тайм-зоне пользователя (settings.ews_timezone), а не в UTC.
+    """
     from exchangelib import EWSDateTime, UTC
 
-    ews_start = EWSDateTime.from_datetime(start).replace(tzinfo=UTC)
-    ews_end = EWSDateTime.from_datetime(end).replace(tzinfo=UTC)
+    tz_name = timezone or settings.ews_timezone
+    local_tz = ZoneInfo(tz_name)
+
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=local_tz)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=local_tz)
+
+    # Конвертируем в UTC для EWS, сохраняя реальное локальное время
+    ews_start = EWSDateTime.from_datetime(start.astimezone(UTC))
+    ews_end = EWSDateTime.from_datetime(end.astimezone(UTC))
 
     def _fetch():
         acc = _build_account(account)
