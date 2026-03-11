@@ -531,13 +531,16 @@ async def conflict_show_slots(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
+    # Сохраняем найденные слоты в состояние, чтобы не кодировать время в callback_data
+    await state.update_data(conflict_slots=slots)
+
     builder = InlineKeyboardBuilder()
-    for slot in slots[:6]:
+    for idx, slot in enumerate(slots[:6]):
         s = _parse_dt(slot.get("start_at"))
         e = _parse_dt(slot.get("end_at"))
         if s and e:
             label = f"{s.strftime('%d.%m %H:%M')} – {e.strftime('%H:%M')}"
-            builder.button(text=label, callback_data=f"slot:pick:{slot['start_at']}:{slot['end_at']}")
+            builder.button(text=label, callback_data=f"slot:pick:{idx}")
     builder.button(text="Отмена", callback_data="confirm:cancel")
     builder.adjust(1)
 
@@ -550,21 +553,46 @@ async def conflict_show_slots(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("slot:pick:"), CreateEventStates.conflict)
 async def slot_picked(callback: CallbackQuery, state: FSMContext):
-    _, _, start_str, end_str = callback.data.split(":", 3)
-    data = await state.get_data()
+    _, _, idx_str = callback.data.split(":", 2)
+    try:
+        idx = int(idx_str)
+    except ValueError:
+        await callback.message.edit_text("Не удалось распознать выбранный слот.")
+        await state.clear()
+        await callback.answer()
+        return
 
-    if data.get("draft"):
-        draft = dict(data["draft"])
-        draft["start_at"] = start_str
-        draft["end_at"] = end_str
-        await state.update_data(draft=draft)
-    else:
-        s = datetime.fromisoformat(start_str)
-        await state.update_data(
-            chosen_date=s.strftime("%Y-%m-%d"),
-            chosen_time=s.strftime("%H:%M"),
-            duration=int((datetime.fromisoformat(end_str) - s).total_seconds() // 60),
-        )
+    data = await state.get_data()
+    slots = data.get("conflict_slots") or []
+
+    if idx < 0 or idx >= len(slots):
+        await callback.message.edit_text("Выбранный слот больше недоступен. Попробуйте ещё раз.")
+        await state.clear()
+        await callback.answer()
+        return
+
+    slot = slots[idx]
+    start_str = slot.get("start_at")
+    end_str = slot.get("end_at")
+
+    try:
+        if data.get("draft"):
+            draft = dict(data["draft"])
+            draft["start_at"] = start_str
+            draft["end_at"] = end_str
+            await state.update_data(draft=draft)
+        else:
+            s = datetime.fromisoformat(start_str)
+            await state.update_data(
+                chosen_date=s.strftime("%Y-%m-%d"),
+                chosen_time=s.strftime("%H:%M"),
+                duration=int((datetime.fromisoformat(end_str) - s).total_seconds() // 60),
+            )
+    except Exception:
+        await callback.message.edit_text("Не удалось обработать выбранный слот.")
+        await state.clear()
+        await callback.answer()
+        return
 
     data = await state.get_data()
     start, end, title = _get_start_end_title(data)
