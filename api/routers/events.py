@@ -32,6 +32,39 @@ logger = structlog.get_logger()
 router = APIRouter(prefix="/api/v1/events", tags=["events"])
 
 
+_BUSY_PREFIXES = ("[Занято] ", "[Tentative] ", "[Tentatively Accepted] ", "[Declined] ")
+
+
+def _strip_busy_prefix(title: str) -> str:
+    for prefix in _BUSY_PREFIXES:
+        if title.startswith(prefix):
+            return title[len(prefix):]
+    return title
+
+
+def _dedup_events(events: list[dict]) -> list[dict]:
+    """Deduplicate events from multiple calendars/mirrors.
+
+    Key: (normalized title, start minute). When duplicates exist, prefer the
+    entry without a busy prefix (has full details) over the one with it.
+    """
+    seen: dict[tuple, dict] = {}
+    for ev in events:
+        title_norm = _strip_busy_prefix(ev.get("title", ""))
+        start_key = (ev.get("start_at") or "")[:16]  # YYYY-MM-DDTHH:MM
+        key = (title_norm, start_key)
+        existing = seen.get(key)
+        if existing is None:
+            seen[key] = ev
+        else:
+            # Prefer the entry without a busy prefix (richer data)
+            has_busy = any(ev.get("title", "").startswith(p) for p in _BUSY_PREFIXES)
+            existing_has_busy = any(existing.get("title", "").startswith(p) for p in _BUSY_PREFIXES)
+            if existing_has_busy and not has_busy:
+                seen[key] = ev
+    return list(seen.values())
+
+
 async def _fetch_ews_events(
     user_id: uuid.UUID, start: datetime, end: datetime, session: AsyncSession
 ) -> list[dict]:
@@ -61,6 +94,7 @@ async def _fetch_ews_events(
         except Exception as e:
             logger.warning("Failed to fetch EWS events", calendar=cal.name, error=str(e))
 
+    events = _dedup_events(events)
     events.sort(key=lambda x: x["start_at"])
     return events
 
@@ -188,13 +222,13 @@ async def delete_by_exchange_ids(
     """Delete events by Exchange item IDs. Tries DB lookup first, falls back to direct EWS deletion."""
     user = await get_or_create_user(telegram_user_id, session)
 
-    # Get first active account for direct EWS fallback
+    # Get all active accounts for EWS fallback (event may belong to any account)
     acc_result = await session.execute(
         select(ExchangeAccount).join(Calendar, Calendar.account_id == ExchangeAccount.id)
         .where(Calendar.user_id == user.id, Calendar.is_active == True)
-        .limit(1)
+        .distinct()
     )
-    fallback_account = acc_result.scalar_one_or_none()
+    all_accounts = acc_result.scalars().all()
 
     deleted = 0
     errors = []
@@ -211,14 +245,25 @@ async def delete_by_exchange_ids(
 
             if event:
                 await delete_event(user.id, event.id, "single", session)
-            elif fallback_account:
-                await ews_delete_event(fallback_account, "", eid)
-            else:
-                errors.append(f"{eid[:20]}...: no account")
+                deleted += 1
                 continue
-            deleted += 1
+
+            # Not in DB — try each EWS account until one succeeds
+            ok = False
+            last_err = "no accounts"
+            for account in all_accounts:
+                try:
+                    await ews_delete_event(account, "", eid)
+                    ok = True
+                    break
+                except Exception as e:
+                    last_err = str(e)
+            if ok:
+                deleted += 1
+            else:
+                errors.append(f"{eid[:30]}...: {last_err}")
         except Exception as e:
-            errors.append(f"{eid[:20]}...: {e}")
+            errors.append(f"{eid[:30]}...: {e}")
 
     return {"deleted": deleted, "errors": errors}
 

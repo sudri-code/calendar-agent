@@ -257,9 +257,17 @@ class EWSClient:
             from exchangelib.items import SEND_TO_ALL_AND_SAVE_COPY
 
             acc = self._get_account()
-            items = list(acc.calendar.filter(id=item_id))
-            if items:
-                items[0].delete(send_meeting_cancellations=SEND_TO_ALL_AND_SAVE_COPY)
+            # Search default calendar and all sub-folders
+            folders = [acc.calendar] + list(acc.calendar.children)
+            for folder in folders:
+                try:
+                    items = list(folder.filter(id=item_id))
+                    if items:
+                        items[0].delete(send_meeting_cancellations=SEND_TO_ALL_AND_SAVE_COPY)
+                        return
+                except Exception:
+                    continue
+            raise ValueError(f"Event {item_id[:30]}... not found in any calendar folder")
 
         return await run_ews(_fetch)
 
