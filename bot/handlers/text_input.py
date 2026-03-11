@@ -54,6 +54,10 @@ async def handle_free_text(message: Message, state: FSMContext):
         from bot.handlers.delete import cmd_delete
         await cmd_delete(message, state)
 
+    elif intent == "free_slot":
+        from bot.handlers.delete import handle_free_slot_intent
+        await handle_free_slot_intent(message, state, result)
+
     elif intent == "find_slot":
         await _handle_find_slot(message, state, result)
 
@@ -251,6 +255,9 @@ async def handle_stuck_state(message: Message, state: FSMContext):
     elif intent == "delete_event":
         from bot.handlers.delete import cmd_delete
         await cmd_delete(message, state)
+    elif intent == "free_slot":
+        from bot.handlers.delete import handle_free_slot_intent
+        await handle_free_slot_intent(message, state, result)
     elif intent == "find_slot":
         await _handle_find_slot(message, state, result)
     elif intent == "show_day":

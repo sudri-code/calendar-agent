@@ -15,6 +15,8 @@
 10. Продолжительность по умолчанию = 60 минут если не указано.
 11. Имена участников всегда приводи к именительному падежу (например: "с Ивановым" → "Иванов", "для Марии Петровой" → "Мария Петрова").
 
+Намерение "free_slot" используй когда пользователь просит освободить время, убрать/отменить встречи в конкретный слот (например: "освободи завтра в 14", "очисти расписание на 15:00").
+
 Рекуррентные паттерны:
 - "каждый день" → frequency: "daily", interval: 1
 - "каждый рабочий день" → frequency: "weekly", days_of_week: ["MO","TU","WE","TH","FR"]
@@ -30,7 +32,7 @@
 
 Схема ответа:
 {
-  "intent": "create_event" | "reschedule_event" | "delete_event" | "find_slot" | "show_day" | "show_week" | "unknown",
+  "intent": "create_event" | "reschedule_event" | "delete_event" | "free_slot" | "find_slot" | "show_day" | "show_week" | "unknown",
   "confidence": 0.0-1.0,
   "title": "название встречи или null",
   "date_range": {"from": "YYYY-MM-DD", "to": "YYYY-MM-DD"} | null,

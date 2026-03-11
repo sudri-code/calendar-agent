@@ -1,10 +1,11 @@
-from datetime import date
+from datetime import date, datetime, timedelta
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from bot.handlers.today import _format_event
 from bot.keyboards.event_list_keyboard import build_event_list_keyboard
 from bot.keyboards.recurrence_keyboard import build_recurrence_mode_keyboard
 from bot.services.api_client import api_client
@@ -118,4 +119,116 @@ async def delete_confirm(callback: CallbackQuery, state: FSMContext):
 async def delete_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text("Удаление отменено.")
+    await callback.answer()
+
+
+async def handle_free_slot_intent(message: Message, state: FSMContext, result: dict):
+    """Handle 'free_slot' intent: show overlapping events and offer to delete them."""
+    raw = result.get("raw") or {}
+    date_range = raw.get("date_range") or {}
+    start_time = raw.get("start_time")
+    duration = raw.get("duration_minutes") or 60
+
+    date_str = date_range.get("from")
+    if not date_str or not start_time:
+        await message.answer("Не смог определить дату или время. Попробуйте уточнить.")
+        return
+
+    try:
+        slot_start = datetime.fromisoformat(f"{date_str}T{start_time}:00")
+        slot_end = slot_start + timedelta(minutes=int(duration))
+    except Exception:
+        await message.answer("Не смог разобрать время. Попробуйте уточнить.")
+        return
+
+    try:
+        events = await api_client.get(
+            "/api/v1/events/day",
+            params={"telegram_user_id": message.from_user.id, "date": date_str},
+        )
+    except Exception as e:
+        await message.answer(f"Ошибка при получении событий: {e}")
+        return
+
+    def _parse_naive(s: str) -> datetime | None:
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            return dt.replace(tzinfo=None) if dt.tzinfo else dt
+        except Exception:
+            return None
+
+    overlapping = []
+    for ev in (events or []):
+        ev_start = _parse_naive(ev.get("start_at", ""))
+        ev_end = _parse_naive(ev.get("end_at", ""))
+        if ev_start and ev_end and ev_start < slot_end and ev_end > slot_start:
+            overlapping.append(ev)
+
+    if not overlapping:
+        await message.answer(
+            f"В {slot_start.strftime('%H:%M')}–{slot_end.strftime('%H:%M')} нет встреч."
+        )
+        return
+
+    lines = [
+        f"<b>Встречи в {slot_start.strftime('%H:%M')}–{slot_end.strftime('%H:%M')}:</b>\n"
+    ]
+    for ev in overlapping:
+        lines.append(_format_event(ev))
+
+    n = len(overlapping)
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=f"Удалить {'все ' + str(n) + ' встречи' if n > 1 else 'встречу'}",
+        callback_data="freeslot:confirm",
+    )
+    builder.button(text="Отмена", callback_data="freeslot:cancel")
+    builder.adjust(1)
+
+    await state.update_data(
+        free_slot_event_ids=[ev["id"] for ev in overlapping],
+    )
+    await state.set_state(DeleteStates.free_slot_confirm)
+    await message.answer(
+        "\n\n".join(lines),
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "freeslot:confirm", DeleteStates.free_slot_confirm)
+async def freeslot_confirm(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    event_ids = data.get("free_slot_event_ids", [])
+    await state.clear()
+
+    await callback.message.edit_text("Удаляю встречи...")
+    errors = []
+    for event_id in event_ids:
+        try:
+            await api_client.delete(
+                f"/api/v1/events/{event_id}",
+                params={
+                    "telegram_user_id": callback.from_user.id,
+                    "recurrence_delete_mode": "single",
+                },
+            )
+        except Exception as e:
+            errors.append(str(e))
+
+    if errors:
+        await callback.message.edit_text(
+            f"Удалено {len(event_ids) - len(errors)} из {len(event_ids)}. Ошибки: {'; '.join(errors)}"
+        )
+    else:
+        await callback.message.edit_text(
+            f"✅ Слот освобождён, удалено встреч: {len(event_ids)}"
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "freeslot:cancel", DeleteStates.free_slot_confirm)
+async def freeslot_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("Отменено.")
     await callback.answer()

@@ -34,3 +34,4 @@ class DeleteStates(StatesGroup):
     choose_event = State()
     choose_recurrence_mode = State()
     confirm = State()
+    free_slot_confirm = State()
