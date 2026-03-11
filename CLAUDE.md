@@ -71,7 +71,9 @@ The system uses **`exchangelib`** (Exchange Web Services) to connect to an on-pr
 - `api/services/events/event_service.py` — create/delete orchestrator; acquires `redis_lock("sync_group:{user_id}")` before any write, then calls EWS, then commits DB. On partial mirror failure sets `sync_group.state = DEGRADED`.
 - `api/services/events/mirror_service.py` — `sync_mirror_to_primary()` updates all mirror events to match primary; `repair_sync_group()` is called by daily reconciliation.
 - `api/services/events/recurrence_mapper.py` — bidirectional Graph `patternedRecurrence` ↔ RRULE (exchangelib uses its own recurrence objects internally; this mapper handles DB storage format). **All recurrence format conversions must go through here.**
+- `api/services/events/recurrence_service.py` — computes virtual occurrences from RRULE, caches in Redis `occurrences:{master_id}:{week_start}` (TTL 30 min), handles exception materialisation.
 - `api/services/llm/parser.py` — calls OpenRouter with `response_format: json_object`, maintains per-user LLM session (up to 4 turns, 30-min TTL in `llm_sessions` table).
+- `api/services/graph/` — Microsoft Graph API client for OAuth-connected accounts (separate flow from EWS; `api/services/auth/oauth.py` handles the OAuth exchange).
 
 ### Database / recurrence storage strategy
 Only **series masters** are stored in `events` with `is_recurrence_master=True`. Virtual (unmodified) occurrences are computed on the fly via `dateutil.rrulestr(event.recurrence_rule)` and cached in Redis `occurrences:{master_id}:{week_start}` (TTL 30 min). Exception occurrences (moved/cancelled) are materialised as separate rows with `recurrence_master_id` pointing to the master and `recurrence_exception_date` = the original occurrence date.
@@ -83,8 +85,9 @@ Every event belongs to a `sync_group`. Each group has exactly one `PRIMARY` even
 | Task | Schedule |
 |------|----------|
 | `poll_calendar_changes_task` | every 5 min |
-| `reconcile_sync_groups_task` | daily 03:00 UTC |
+| `sync_all_calendars_task` | every 12 h |
 | `sync_all_contacts_task` | every 12 h |
+| `reconcile_sync_groups_task` | daily 03:00 UTC |
 
 ### Bot FSM
 All conversation flows use aiogram FSM backed by `RedisStorage`. State groups live in `bot/states/`. The create flow branches at `choose_mode`: "текстом" calls `POST /api/v1/events/draft/parse` (LLM), "пошагово" collects fields step-by-step. Both paths converge at `choose_calendar` → `confirm` → `POST /api/v1/events`.

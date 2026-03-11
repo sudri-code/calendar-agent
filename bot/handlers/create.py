@@ -7,6 +7,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from zoneinfo import ZoneInfo
 
+import httpx
+
 from bot.keyboards.inline_calendar import build_calendar_keyboard, build_time_grid_keyboard
 from bot.keyboards.recurrence_keyboard import build_recurrence_choice_keyboard
 from bot.services.api_client import api_client
@@ -510,6 +512,15 @@ async def _do_create(callback: CallbackQuery, state: FSMContext):
             f"✅ Встреча создана!\n<b>{result.get('title')}</b>",
             parse_mode="HTML",
         )
+    except httpx.HTTPStatusError as e:
+        # Показываем деталь из API, чтобы понять причину 400/500
+        detail = ""
+        try:
+            detail_json = e.response.json()
+            detail = detail_json.get("detail") or detail_json
+        except Exception:
+            detail = e.response.text
+        await callback.message.edit_text(f"Ошибка при создании встречи: {e}\n\nДетали: {detail}")
     except Exception as e:
         await callback.message.edit_text(f"Ошибка при создании встречи: {e}")
     await state.clear()
