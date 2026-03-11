@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone as stdlib_utc
 from zoneinfo import ZoneInfo
 
 from api.config import settings
@@ -18,8 +18,11 @@ def _to_ews_datetime(dt: datetime):
         local_tz = ZoneInfo(settings.ews_timezone)
         dt = dt.replace(tzinfo=local_tz)
 
-    # В EWS всё уходит в UTC с корректным сдвигом
-    return EWSDateTime.from_datetime(dt.astimezone(UTC))
+    # Конвертируем в UTC через stdlib, чтобы не получить EWSDateTime.
+    # exchangelib.UTC — это EWSTimeZone; .astimezone(EWSTimeZone) вернёт EWSDateTime,
+    # а EWSDateTime.from_datetime() запрещает принимать EWSDateTime на вход.
+    dt_utc = dt.astimezone(stdlib_utc.utc)
+    return EWSDateTime.from_datetime(dt_utc).replace(tzinfo=UTC)
 
 
 async def list_events(account, calendar_id: str, start: datetime, end: datetime) -> list[dict]:
