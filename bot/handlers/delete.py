@@ -197,9 +197,12 @@ async def handle_free_slot_intent(message: Message, state: FSMContext, result: d
     builder.button(text="Отмена", callback_data="freeslot:cancel")
     builder.adjust(1)
 
-    await state.update_data(
-        free_slot_event_ids=[ev["id"] for ev in overlapping],
-    )
+    # Collect ALL Exchange IDs for each overlapping event (including mirror copies)
+    all_ids: list[str] = []
+    for ev in overlapping:
+        all_ids.extend(ev.get("_all_ids") or [ev["id"]])
+
+    await state.update_data(free_slot_event_ids=all_ids)
     await state.set_state(DeleteStates.free_slot_confirm)
     await message.answer(
         "\n\n".join(lines),

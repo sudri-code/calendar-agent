@@ -46,7 +46,8 @@ def _dedup_events(events: list[dict]) -> list[dict]:
     """Deduplicate events from multiple calendars/mirrors.
 
     Key: (normalized title, start minute). When duplicates exist, prefer the
-    entry without a busy prefix (has full details) over the one with it.
+    entry without a busy prefix (has full details). All Exchange IDs (including
+    duplicates) are stored in '_all_ids' so deletion can cover every copy.
     """
     seen: dict[tuple, dict] = {}
     for ev in events:
@@ -55,12 +56,18 @@ def _dedup_events(events: list[dict]) -> list[dict]:
         key = (title_norm, start_key)
         existing = seen.get(key)
         if existing is None:
+            ev = dict(ev)
+            ev["_all_ids"] = [ev["id"]]
             seen[key] = ev
         else:
+            existing["_all_ids"].append(ev["id"])
             # Prefer the entry without a busy prefix (richer data)
             has_busy = any(ev.get("title", "").startswith(p) for p in _BUSY_PREFIXES)
             existing_has_busy = any(existing.get("title", "").startswith(p) for p in _BUSY_PREFIXES)
             if existing_has_busy and not has_busy:
+                all_ids = existing["_all_ids"]
+                ev = dict(ev)
+                ev["_all_ids"] = all_ids
                 seen[key] = ev
     return list(seen.values())
 
