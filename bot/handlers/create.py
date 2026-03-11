@@ -85,7 +85,12 @@ async def create_text_mode(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "create:mode:step", CreateEventStates.choose_mode)
 async def create_step_mode(callback: CallbackQuery, state: FSMContext):
     await state.update_data(mode="step", telegram_user_id=callback.from_user.id)
-    await _ask_calendar(callback.message, state)
+    today = date.today()
+    await state.set_state(CreateEventStates.choose_date)
+    await callback.message.edit_text(
+        "Выберите дату:",
+        reply_markup=build_calendar_keyboard(today.year, today.month),
+    )
     await callback.answer()
 
 
@@ -228,7 +233,9 @@ async def _ask_calendar(message: Message, state: FSMContext, prefix: str = ""):
 
     builder = InlineKeyboardBuilder()
     for cal in active_cals[:10]:
-        builder.button(text=cal["name"], callback_data=f"cal_select:{cal['id']}")
+        email = cal.get("account_email") or ""
+        label = f"{cal['name']} ({email})" if email else cal["name"]
+        builder.button(text=label, callback_data=f"cal_select:{cal['id']}")
     builder.adjust(1)
 
     text = (prefix + "\n\n" if prefix else "") + "Выберите основной календарь:"
@@ -242,22 +249,14 @@ async def calendar_selected(callback: CallbackQuery, state: FSMContext):
     await state.update_data(calendar_id=calendar_id)
 
     data = await state.get_data()
-    if data.get("draft"):
-        # Text mode: already have draft, go to confirm
+    if data.get("draft") or data.get("title"):
+        # All data ready (text mode or step mode after full flow): go to confirm
         await _show_confirm(callback.message, state)
-    elif data.get("chosen_date"):
-        # Date already set (e.g. coming from find_slot), skip to title
+    else:
+        # find_slot path: date/time/duration set but no title yet
         await state.set_state(CreateEventStates.enter_title)
         await state.update_data(mode="step")
         await callback.message.edit_text("Введите название встречи:")
-    else:
-        # Step mode: ask date
-        today = date.today()
-        await state.set_state(CreateEventStates.choose_date)
-        await callback.message.edit_text(
-            "Выберите дату:",
-            reply_markup=build_calendar_keyboard(today.year, today.month),
-        )
     await callback.answer()
 
 
@@ -368,7 +367,11 @@ async def description_entered(message: Message, state: FSMContext):
 @router.callback_query(F.data == "rec:none", CreateEventStates.choose_recurrence)
 async def recurrence_none(callback: CallbackQuery, state: FSMContext):
     await state.update_data(recurrence=None)
-    await _show_confirm(callback.message, state)
+    data = await state.get_data()
+    if data.get("calendar_id"):
+        await _show_confirm(callback.message, state)
+    else:
+        await _ask_calendar(callback.message, state)
     await callback.answer()
 
 
@@ -384,7 +387,11 @@ async def recurrence_simple(callback: CallbackQuery, state: FSMContext):
     freq = freq_map[callback.data]
     recurrence = {"frequency": freq, "interval": 1, "end_type": "no_end"}
     await state.update_data(recurrence=recurrence)
-    await _show_confirm(callback.message, state)
+    data = await state.get_data()
+    if data.get("calendar_id"):
+        await _show_confirm(callback.message, state)
+    else:
+        await _ask_calendar(callback.message, state)
     await callback.answer()
 
 
@@ -514,7 +521,7 @@ def _build_draft_payload(data: dict) -> dict:
         "title": data.get("title", "Встреча"),
         "start_at": start.isoformat(),
         "end_at": end.isoformat(),
-        "timezone": "UTC",
+        "timezone": bot_settings.ews_timezone,
         "description": data.get("description"),
         "attendees": data.get("attendees", []),
         "calendar_id": data.get("calendar_id"),

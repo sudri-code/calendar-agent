@@ -12,8 +12,24 @@ class CalendarResponse(BaseModel):
     is_default: bool
     is_mirror_enabled: bool
     timezone: Optional[str]
+    account_email: Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_calendar(cls, cal) -> "CalendarResponse":
+        data = {
+            "id": cal.id,
+            "account_id": cal.account_id,
+            "external_calendar_id": cal.external_calendar_id,
+            "name": cal.name,
+            "is_active": cal.is_active,
+            "is_default": cal.is_default,
+            "is_mirror_enabled": cal.is_mirror_enabled,
+            "timezone": cal.timezone,
+            "account_email": cal.account.email if cal.account else None,
+        }
+        return cls(**data)
 
 
 class CalendarPatch(BaseModel):

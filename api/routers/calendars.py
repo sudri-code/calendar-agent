@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from api.db.session import get_async_session
 from api.models.calendar import Calendar
@@ -23,9 +24,12 @@ async def list_calendars_endpoint(
     user = await get_or_create_user(telegram_user_id, session)
     excluded_names = {"дни рождения", "birthdays", "birthday"}
     result = await session.execute(
-        select(Calendar).where(Calendar.user_id == user.id)
+        select(Calendar)
+        .options(joinedload(Calendar.account))
+        .where(Calendar.user_id == user.id)
     )
-    return [c for c in result.scalars().all() if c.name.strip().lower() not in excluded_names]
+    cals = [c for c in result.scalars().all() if c.name.strip().lower() not in excluded_names]
+    return [CalendarResponse.from_calendar(c) for c in cals]
 
 
 @router.patch("/{calendar_id}", response_model=CalendarResponse)
