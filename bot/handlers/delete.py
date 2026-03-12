@@ -141,12 +141,17 @@ async def handle_free_slot_intent(message: Message, state: FSMContext, result: d
         start_time = raw.get("start_time")
         duration = raw.get("duration_minutes") or 60
         date_str = date_range.get("from")
-        if not date_str or not start_time:
-            await message.answer("Не смог определить дату или время. Попробуйте уточнить.")
+        if not date_str:
+            await message.answer("Не смог определить дату. Попробуйте уточнить.")
             return
         try:
-            slot_start = datetime.fromisoformat(f"{date_str}T{start_time}:00")
-            slot_end = slot_start + timedelta(minutes=int(duration))
+            if start_time:
+                slot_start = datetime.fromisoformat(f"{date_str}T{start_time}:00")
+                slot_end = slot_start + timedelta(minutes=int(duration))
+            else:
+                # No specific time — treat as the full day
+                slot_start = datetime.fromisoformat(f"{date_str}T00:00:00")
+                slot_end = datetime.fromisoformat(f"{date_str}T23:59:59")
         except Exception:
             await message.answer("Не смог разобрать время. Попробуйте уточнить.")
             return
@@ -182,9 +187,9 @@ async def handle_free_slot_intent(message: Message, state: FSMContext, result: d
         )
         return
 
-    lines = [
-        f"<b>Встречи в {slot_start.strftime('%H:%M')}–{slot_end.strftime('%H:%M')}:</b>\n"
-    ]
+    is_full_day = slot_start.hour == 0 and slot_end.hour == 23
+    time_label = slot_start.strftime('%d.%m') if is_full_day else f"{slot_start.strftime('%H:%M')}–{slot_end.strftime('%H:%M')}"
+    lines = [f"<b>Встречи {time_label}:</b>\n"]
     for ev in overlapping:
         lines.append(_format_event(ev))
 
